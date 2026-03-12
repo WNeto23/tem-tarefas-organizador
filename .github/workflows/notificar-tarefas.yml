@@ -2,12 +2,15 @@ name: 🤖 Notificar Tarefas - Tem Tarefas?
 
 on:
   schedule:
-    - cron: '0 11 * * *'   # 08:00 BRT (11:00 UTC) - Resumo completo
-    - cron: '0 12 * * *'   # 09:00 BRT (12:00 UTC) - Tarefas pendentes
-    - cron: '0 16 * * *'   # 13:00 BRT (16:00 UTC) - Tarefas urgentes
-    - cron: '0 19 * * *'   # 16:00 BRT (19:00 UTC) - Pendências da tarde
-    - cron: '0 21 * * *'   # 18:00 BRT (21:00 UTC) - Resumo final
-  workflow_dispatch:        # Permite execução manual - sim
+    # Horários em UTC (GitHub usa UTC)
+    # 11:00 UTC = 08:00 BRT
+    - cron: '0 11 * * *'   # Resumo completo
+    - cron: '0 12 * * *'   # Tarefas pendentes
+    - cron: '0 16 * * *'   # Tarefas urgentes
+    - cron: '0 19 * * *'   # Pendências da tarde
+    - cron: '0 21 * * *'   # Resumo final
+
+  workflow_dispatch: # execução manual
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -15,6 +18,10 @@ env:
 permissions:
   contents: read
   issues: write
+
+concurrency:
+  group: notificador-tarefas
+  cancel-in-progress: false
 
 jobs:
   notificar-tarefas:
@@ -24,7 +31,10 @@ jobs:
     timeout-minutes: 10
 
     steps:
-      # 1. Verificar segredos
+
+      # ---------------------------------------------------------
+      # 1. Verificar segredos obrigatórios
+      # ---------------------------------------------------------
       - name: 🔍 Verificar Segredos Obrigatórios
         env:
           API_URL_TAREFAS: ${{ secrets.API_URL_TAREFAS }}
@@ -32,75 +42,80 @@ jobs:
           TOKEN_TELEGRAM: ${{ secrets.TOKEN_TELEGRAM }}
         run: |
           echo "🔐 Verificando credenciais..."
-          echo "✅ Data/Hora: $(date -u)"
-          echo "🕐 BRT: $(TZ=America/Sao_Paulo date +%H:%M)"
-          
-          SECRETS_MISSING=0
-          
-          if [ -z "$API_URL_TAREFAS" ]; then
-            echo "❌ ERRO: Secret API_URL_TAREFAS não configurado!"
-            SECRETS_MISSING=1
-          fi
-          if [ -z "$API_TOKEN_TAREFAS" ]; then
-            echo "❌ ERRO: Secret API_TOKEN_TAREFAS não configurado!"
-            SECRETS_MISSING=1
-          fi
-          if [ -z "$TOKEN_TELEGRAM" ]; then
-            echo "❌ ERRO: Secret TOKEN_TELEGRAM não configurado!"
-            SECRETS_MISSING=1
-          fi
-          
-          if [ $SECRETS_MISSING -eq 1 ]; then
-            exit 1
-          fi
+          echo "🕐 Data/Hora UTC: $(date -u)"
+          echo "🕐 BRT: $(TZ=America/Sao_Paulo date)"
+
+          for secret in API_URL_TAREFAS API_TOKEN_TAREFAS TOKEN_TELEGRAM; do
+            if [ -z "${!secret}" ]; then
+              echo "❌ Secret $secret não configurado!"
+              exit 1
+            fi
+          done
+
           echo "✅ Todos os segredos estão configurados!"
 
-      # 2. Checkout
+      # ---------------------------------------------------------
+      # 2. Checkout do repositório
+      # ---------------------------------------------------------
       - name: 📥 Checkout do Repositório
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      # 3. Python
+      # ---------------------------------------------------------
+      # 3. Configurar Python
+      # ---------------------------------------------------------
       - name: 🐍 Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
           cache: 'pip'
+          cache-dependency-path: requirements.txt
 
+      # ---------------------------------------------------------
       # 4. Instalar dependências
+      # ---------------------------------------------------------
       - name: 📦 Instalar Dependências
         run: |
           python -m pip install --upgrade pip
-          pip install requests \
-                      python-dotenv \
-                      pytz
+
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "⚠️ requirements.txt não encontrado, instalando dependências padrão..."
+            pip install requests python-dotenv pytz
+          fi
+
           echo "📋 Dependências instaladas:"
           pip list
 
-      # 5. Executar notificador de tarefas
+      # ---------------------------------------------------------
+      # 5. Executar notificador
+      # ---------------------------------------------------------
       - name: 📋 Executar Notificador de Tarefas
         env:
           API_URL_TAREFAS: ${{ secrets.API_URL_TAREFAS }}
           API_TOKEN_TAREFAS: ${{ secrets.API_TOKEN_TAREFAS }}
           TOKEN_TELEGRAM: ${{ secrets.TOKEN_TELEGRAM }}
           TZ: America/Sao_Paulo
-          HORARIO: $(TZ=America/Sao_Paulo date +%H)
         run: |
-          echo "🚀 Iniciando notificador de tarefas em $(date)"
-          echo "🌐 API: $API_URL_TAREFAS"
-          echo "🕐 Horário BRT: $(TZ=America/Sao_Paulo date +%H:%M)"
-          
-          python scripts/notificador_tarefas.py 2>&1 | tee notificador_tarefas.log
-          
-          if [ ${PIPESTATUS[0]} -eq 0 ]; then
-            echo "✅ Notificador executado com sucesso!"
-          else
-            echo "❌ Notificador falhou!"
-            exit 1
-          fi
+          set -o pipefail
 
-      # 6. Upload logs
+          echo "🚀 Iniciando notificador..."
+          echo "🕐 Horário BRT: $(date)"
+
+          HORARIO=$(date +%H)
+          export HORARIO
+
+          echo "⏰ Hora atual: $HORARIO"
+
+          python scripts/notificador_tarefas.py | tee notificador_tarefas.log
+
+          echo "✅ Script finalizado"
+
+      # ---------------------------------------------------------
+      # 6. Upload de logs
+      # ---------------------------------------------------------
       - name: 📤 Upload de Logs
         if: always()
         uses: actions/upload-artifact@v4
@@ -108,32 +123,55 @@ jobs:
           name: logs-notificacoes-tarefas-${{ github.run_id }}
           path: |
             *.log
-            notificador_tarefas.log
-          retention-days: 90
+          retention-days: 14
           if-no-files-found: warn
 
+      # ---------------------------------------------------------
       # 7. Criar issue se falhar
+      # ---------------------------------------------------------
       - name: 🔔 Criar Issue em Caso de Falha
         if: failure()
         uses: actions/github-script@v7
         with:
           script: |
-            const title = `🚨 Falha na Notificação de Tarefas - ${new Date().toLocaleDateString('pt-BR')}`;
-            const body = `
-            ## ❌ Falha na Notificação Automática de Tarefas
-            **Data/Hora:** ${new Date().toLocaleString('pt-BR')}
-            **Workflow:** ${context.workflow}
-            **Run ID:** ${context.runId}
-            **Horário:** $(TZ=America/Sao_Paulo date +%H:%M)
-            ### 📋 Logs
-            ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
-            ### ⚡ Ação Necessária
-            Verifique os logs e corrija o problema manualmente.
-            `;
-            await github.rest.issues.create({
+
+            const data = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+
+            const issues = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: title,
-              body: body,
-              labels: ['bug', 'automation-failed', 'tarefas']
+              labels: 'automation-failed,tarefas',
+              state: 'open'
             });
+
+            if (issues.data.length === 0) {
+
+              const title = `🚨 Falha na Notificação de Tarefas - ${data}`;
+
+              const body = `
+              ## ❌ Falha na automação de notificação de tarefas
+
+              **Data/Hora:** ${data}
+
+              **Workflow:** ${context.workflow}
+
+              **Run ID:** ${context.runId}
+
+              ### 📋 Logs da execução
+              ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
+
+              ### ⚡ Ação necessária
+              Verifique os logs da execução e corrija o problema.
+              `;
+
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: title,
+                body: body,
+                labels: ['bug','automation-failed','tarefas']
+              });
+
+            } else {
+              console.log("⚠️ Já existe uma issue aberta para falha da automação.");
+            }

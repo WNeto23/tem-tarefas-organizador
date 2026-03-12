@@ -1,6 +1,7 @@
 import flet as ft
 from datetime import datetime, timedelta
-from models.tarefa import TarefaModel, FASES_DISPONIVEIS
+from tarefas_api_client import TarefaModel
+from models.tarefa import FASES_DISPONIVEIS
 from utils.tarefa_detalhe import criar_tarefa_detalhe_overlay
 # Configuração de debug
 DEBUG = True

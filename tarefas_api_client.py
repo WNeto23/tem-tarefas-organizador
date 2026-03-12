@@ -15,6 +15,7 @@ main.py e dashboard.py precisem do mínimo de alterações.
 import os
 import requests
 import json
+from datetime import datetime, date
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -93,7 +94,7 @@ def _delete(endpoint):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# PROXY: UsuarioModel  — adaptado à API real com novo endpoint de registro
+# PROXY: UsuarioModel
 # ══════════════════════════════════════════════════════════════════════
 
 class UsuarioModel:
@@ -110,7 +111,6 @@ class UsuarioModel:
         try:
             print(f"🔵 Cadastrando usuário: {nome_usuario}")
             
-            # Usa o novo endpoint de registro sem token
             r = _post("/tarefas-app/auth/registrar", {
                 "nome_completo": nome_completo,
                 "nome_usuario": nome_usuario,
@@ -139,7 +139,6 @@ class UsuarioModel:
             
             print(f"🟢 Login bem-sucedido!")
             
-            # Converte a resposta da API para o formato esperado pelo dashboard
             return {
                 'id': resultado["user_id"],
                 'nome_completo': resultado["nome_completo"],
@@ -167,7 +166,6 @@ class UsuarioModel:
         try:
             usuarios = _get("/tarefas-app/usuarios")
             for u in usuarios:
-                # Compara com o campo 'nome' da API (já que não temos nome_usuario)
                 if u.get("nome") == nome_usuario:
                     return True
             return False
@@ -190,18 +188,30 @@ class UsuarioModel:
     def definir_senha_temporaria(self, email: str, senha_temp: str) -> bool:
         """
         Define uma senha temporária para o usuário.
-        NOTA: Funcionalidade não implementada na API
         """
-        print(f"⚠️ API não suporta senha temporária")
-        return False
+        try:
+            print(f"🔵 Definindo senha temporária para: {email}")
+            _post("/tarefas-app/auth/senha-temporaria", {
+                "email": email,
+                "senha_temp": senha_temp,
+            })
+            return True
+        except:
+            return False
 
     def atualizar_senha_definitiva(self, user_id: int, nova_senha: str) -> bool:
         """
         Atualiza para senha definitiva.
-        NOTA: Funcionalidade não implementada na API
         """
-        print(f"⚠️ API não suporta alteração de senha")
-        return False
+        try:
+            print(f"🔵 Atualizando senha do usuário {user_id}")
+            _put("/tarefas-app/auth/atualizar-senha", {
+                "user_id": user_id,
+                "nova_senha": nova_senha,
+            })
+            return True
+        except:
+            return False
 
     def buscar_dados_por_email(self, email: str) -> tuple | None:
         """
@@ -212,8 +222,7 @@ class UsuarioModel:
             usuarios = _get("/tarefas-app/usuarios")
             for u in usuarios:
                 if u.get("email") == email:
-                    # A API não retorna telegram_chat_id na listagem
-                    return (None, u.get("nome"))
+                    return (u.get("telegram_chat_id"), u.get("nome"))
             return None
         except Exception:
             return None
@@ -235,7 +244,6 @@ class UsuarioModel:
         try:
             print(f"🔵 Vinculando Telegram ao usuário {user_id} com chat_id {telegram_id}")
             
-            # Faz a chamada POST para o endpoint de Telegram
             resultado = _post("/tarefas-app/usuarios/telegram", {
                 "user_id": user_id,
                 "telegram_id": str(telegram_id)
@@ -280,7 +288,6 @@ class UsuarioModel:
     def atualizar_perfil(self, user_id: int, nome_completo: str, email: str, foto=None) -> bool:
         """
         Atualiza perfil do usuário.
-        Usa o endpoint PUT /usuarios/{id} da API
         """
         try:
             print(f"🔵 Atualizando perfil do usuário {user_id}")
@@ -295,7 +302,7 @@ class UsuarioModel:
 
 
 # ══════════════════════════════════════════════════════════════════════
-# PROXY: TarefaModel
+# PROXY: TarefaModel — COMPLETO com todos os métodos
 # ══════════════════════════════════════════════════════════════════════
 
 class TarefaModel:
@@ -309,50 +316,101 @@ class TarefaModel:
         Cria uma nova tarefa.
         """
         print(f"🔵 Criando tarefa para usuário {usuario_id}: {titulo}")
-        r = _post("/tarefas-app/tarefas", {
+        
+        dados = {
             "titulo": titulo,
             "descricao": descricao,
             "responsavel": None,
             "usuario_id": usuario_id,
-            "prazo": None,
+            "data_vencimento": None,
             "status": status,
-        })
+        }
+        
+        r = _post("/tarefas-app/tarefas", dados)
         return r["id"]
 
     def listar_por_usuario(self, usuario_id: int) -> list:
         """
         Lista todas as tarefas do usuário.
-        Filtra localmente pois a API não tem filtro por usuário.
         """
         print(f"🔵 Listando tarefas do usuário {usuario_id}")
-        dados = _get("/tarefas-app/tarefas")
-        tarefas_usuario = [d for d in dados if d.get("usuario_id") == usuario_id]
-        return [self._dict_para_tupla(d) for d in tarefas_usuario]
+        
+        try:
+            dados = _get(f"/tarefas-app/tarefas/{usuario_id}")
+            return [self._dict_para_tupla(d) for d in dados]
+        except Exception as e:
+            print(f"🔴 Erro ao listar tarefas: {e}")
+            return []
 
     def listar_nao_arquivadas(self, usuario_id: int) -> list:
-        """Lista tarefas não arquivadas (mesmo que listar_por_usuario)"""
+        """Lista tarefas não arquivadas"""
         return self.listar_por_usuario(usuario_id)
 
     def listar_arquivadas(self, usuario_id: int) -> list:
-        """Lista tarefas arquivadas (não suportado pela API)"""
-        return []
+        """Lista tarefas arquivadas"""
+        try:
+            print(f"🔵 Listando tarefas arquivadas do usuário {usuario_id}")
+            dados = _get(f"/tarefas-app/tarefas/arquivadas/{usuario_id}")
+            return [self._dict_para_tupla_arquivada(d) for d in dados]
+        except Exception as e:
+            print(f"🔴 Erro ao listar tarefas arquivadas: {e}")
+            return []
 
     def buscar_por_id(self, tarefa_id: int) -> dict | None:
         """Busca tarefa por ID"""
         try:
             print(f"🔵 Buscando tarefa {tarefa_id}")
-            d = _get(f"/tarefas-app/tarefas/{tarefa_id}")
-            from datetime import datetime, date
+            d = _get(f"/tarefas-app/tarefas/detalhe/{tarefa_id}")
             
-            # Converte strings de data
-            if d.get("prazo") and isinstance(d["prazo"], str):
-                d["data_vencimento"] = date.fromisoformat(d["prazo"])
-            if d.get("criado_em") and isinstance(d["criado_em"], str):
-                d["data_criacao"] = datetime.fromisoformat(d["criado_em"])
+            if d.get("data_vencimento") and isinstance(d["data_vencimento"], str):
+                d["data_vencimento"] = date.fromisoformat(d["data_vencimento"])
+            if d.get("data_criacao") and isinstance(d["data_criacao"], str):
+                d["data_criacao"] = datetime.fromisoformat(d["data_criacao"])
+            if d.get("data_conclusao") and isinstance(d["data_conclusao"], str):
+                d["data_conclusao"] = datetime.fromisoformat(d["data_conclusao"])
             
             return d
-        except Exception:
+        except Exception as e:
+            print(f"🔴 Erro ao buscar tarefa: {e}")
             return None
+
+    # =================================================================
+    # NOVO MÉTODO ADICIONADO: atualizar_detalhes
+    # =================================================================
+    def atualizar_detalhes(
+        self,
+        tarefa_id: int,
+        titulo: str,
+        descricao_longa: str,
+        fase: str,
+        data_vencimento,
+        responsavel: str,
+        comentarios: str,
+    ) -> bool:
+        """
+        Atualiza os detalhes completos de uma tarefa.
+        Usa o endpoint PUT /tarefas/{tarefa_id}
+        """
+        try:
+            print(f"🔵 Atualizando detalhes da tarefa {tarefa_id}")
+            
+            # Prepara os dados para enviar à API
+            dados = {
+                "titulo": titulo,
+                "descricao": descricao_longa,
+                "responsavel": responsavel,
+                "usuario_id": None,  # Não altera o usuário
+                "prazo": data_vencimento.isoformat() if data_vencimento else None,
+                "status": fase,  # Mapeia fase para status
+            }
+            
+            _put(f"/tarefas-app/tarefas/{tarefa_id}", dados)
+            print(f"🟢 Detalhes da tarefa {tarefa_id} atualizados com sucesso")
+            return True
+            
+        except Exception as e:
+            print(f"🔴 Erro ao atualizar detalhes: {e}")
+            return False
 
     def atualizar_status(self, tarefa_id: int, novo_status: str) -> bool:
         """Atualiza o status da tarefa"""
@@ -360,12 +418,22 @@ class TarefaModel:
             print(f"🔵 Atualizando status da tarefa {tarefa_id} para {novo_status}")
             _patch(f"/tarefas-app/tarefas/{tarefa_id}/status", {"status": novo_status})
             return True
-        except Exception:
+        except Exception as e:
+            print(f"🔴 Erro ao atualizar status: {e}")
             return False
 
     def atualizar_fase(self, tarefa_id: int, nova_fase: str) -> bool:
-        """Alias para atualizar_status"""
-        return self.atualizar_status(tarefa_id, nova_fase)
+        """
+        Atualiza apenas a fase da tarefa.
+        Usa o endpoint específico PATCH /tarefas/{tarefa_id}/fase
+        """
+        try:
+            print(f"🔵 Atualizando fase da tarefa {tarefa_id} para {nova_fase}")
+            _patch(f"/tarefas-app/tarefas/{tarefa_id}/fase", {"fase": nova_fase})
+            return True
+        except Exception as e:
+            print(f"🔴 Erro ao atualizar fase: {e}")
+            return False
 
     def excluir(self, tarefa_id: int) -> bool:
         """Exclui tarefa"""
@@ -373,33 +441,118 @@ class TarefaModel:
             print(f"🔵 Excluindo tarefa {tarefa_id}")
             _delete(f"/tarefas-app/tarefas/{tarefa_id}")
             return True
-        except Exception:
+        except Exception as e:
+            print(f"🔴 Erro ao excluir tarefa: {e}")
             return False
 
     def arquivar_manual(self, tarefa_id: int) -> bool:
-        """Arquiva tarefa manualmente (não suportado)"""
-        return False
+        """Arquiva tarefa manualmente"""
+        try:
+            print(f"🔵 Arquivando tarefa {tarefa_id}")
+            _patch(f"/tarefas-app/tarefas/{tarefa_id}/arquivar")
+            return True
+        except Exception as e:
+            print(f"🔴 Erro ao arquivar tarefa: {e}")
+            return False
 
     def restaurar_do_arquivo(self, tarefa_id: int) -> bool:
-        """Restaura tarefa do arquivo (não suportado)"""
-        return False
+        """Restaura tarefa do arquivo"""
+        try:
+            print(f"🔵 Restaurando tarefa {tarefa_id}")
+            _patch(f"/tarefas-app/tarefas/{tarefa_id}/restaurar")
+            return True
+        except Exception as e:
+            print(f"🔴 Erro ao restaurar tarefa: {e}")
+            return False
 
     def excluir_permanentemente(self, tarefa_id: int) -> bool:
-        """Exclui tarefa permanentemente (não suportado)"""
-        return False
+        """Exclui tarefa permanentemente"""
+        try:
+            print(f"🔵 Excluindo permanentemente tarefa {tarefa_id}")
+            _delete(f"/tarefas-app/tarefas/{tarefa_id}/permanente")
+            return True
+        except Exception as e:
+            print(f"🔴 Erro ao excluir permanentemente: {e}")
+            return False
 
     def arquivar_tarefas_antigas(self, usuario_id=None) -> int:
-        """Arquiva tarefas antigas (não suportado)"""
-        return 0
+        """Arquiva tarefas antigas (se o endpoint existir)"""
+        try:
+            print(f"🔵 Arquivando tarefas antigas do usuário {usuario_id}")
+            r = _post("/tarefas-app/tarefas/arquivar-antigas", {"usuario_id": usuario_id})
+            return r.get("arquivadas", 0)
+        except Exception as e:
+            print(f"ℹ️ Endpoint de arquivar não disponível: {e}")
+            return 0
 
-    # --- Helpers internos ---
+    # =================================================================
+    # MÉTODOS DE CHECKLIST
+    # =================================================================
+
+    def checklist_listar(self, tarefa_id: int) -> list:
+        """
+        Lista todos os itens de checklist de uma tarefa.
+        Retorna lista de tuplas (id, texto, concluido)
+        """
+        try:
+            print(f"🔵 Listando checklist da tarefa {tarefa_id}")
+            dados = _get(f"/tarefas-app/tarefas/{tarefa_id}/checklist")
+            
+            return [(item["id"], item["texto"], item["concluido"]) for item in dados]
+        except Exception as e:
+            print(f"🔴 Erro ao listar checklist: {e}")
+            return []
+
+    def checklist_adicionar(self, tarefa_id: int, texto: str) -> int:
+        """
+        Adiciona um novo item ao checklist.
+        Retorna o ID do item criado.
+        """
+        try:
+            print(f"🔵 Adicionando item ao checklist da tarefa {tarefa_id}: {texto}")
+            resultado = _post(f"/tarefas-app/tarefas/{tarefa_id}/checklist", {
+                "texto": texto
+            })
+            return resultado["id"]
+        except Exception as e:
+            print(f"🔴 Erro ao adicionar item ao checklist: {e}")
+            raise
+
+    def checklist_marcar(self, item_id: int, concluido: bool) -> bool:
+        """
+        Marca/desmarca um item do checklist.
+        """
+        try:
+            print(f"🔵 Marcando item {item_id} como {concluido}")
+            _patch(f"/tarefas-app/checklist/{item_id}", {
+                "concluido": concluido
+            })
+            return True
+        except Exception as e:
+            print(f"🔴 Erro ao marcar item do checklist: {e}")
+            return False
+
+    def checklist_excluir(self, item_id: int) -> bool:
+        """
+        Exclui um item do checklist.
+        """
+        try:
+            print(f"🔵 Excluindo item {item_id} do checklist")
+            _delete(f"/tarefas-app/checklist/{item_id}")
+            return True
+        except Exception as e:
+            print(f"🔴 Erro ao excluir item do checklist: {e}")
+            return False
+
+    # =================================================================
+    # HELPERS INTERNOS
+    # =================================================================
 
     def _dict_para_tupla(self, d: dict) -> tuple:
         """
-        Converte dict da API para tupla no formato esperado pelo dashboard.
+        Converte dict da API para tupla no formato esperado pelo dashboard:
+        (id, titulo, descricao, status, data_criacao, fase, data_vencimento, responsavel)
         """
-        from datetime import datetime, date
-        
         def parse_date(v):
             if not v:
                 return None
@@ -425,12 +578,21 @@ class TarefaModel:
             d.get("titulo"),
             d.get("descricao"),
             d.get("status"),
-            parse_dt(d.get("criado_em")),
-            d.get("status"),  # fase = status
-            parse_date(d.get("prazo")),
+            parse_dt(d.get("data_criacao")),
+            d.get("fase") or d.get("status"),
+            parse_date(d.get("data_vencimento")),
             d.get("responsavel"),
         )
 
     def _dict_para_tupla_arquivada(self, d: dict) -> tuple:
-        """Para tarefas arquivadas (não usado)"""
-        return self._dict_para_tupla(d) + (None,)
+        """Para tarefas arquivadas (inclui data_conclusao)"""
+        t = self._dict_para_tupla(d)
+        from datetime import datetime
+        def parse_dt(v):
+            if not v:
+                return None
+            try:
+                return datetime.fromisoformat(str(v))
+            except:
+                return None
+        return t + (parse_dt(d.get("data_conclusao")),)
