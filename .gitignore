@@ -7,3 +7,7 @@ binaria.py
 dist
 
 icon
+
+.venv/
+__pycache__/
+*.pyc
