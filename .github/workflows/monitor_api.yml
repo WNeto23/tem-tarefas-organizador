@@ -186,9 +186,23 @@ jobs:
           NEON_STATUS="${{ steps.check_neon.outputs.status }}"
           
           # Define emojis
-          [ "$CAL_STATUS" == "ok" ] && CAL_EMOJI="✅" || CAL_EMOJI="❌"
-          [ "$TAR_STATUS" == "ok" ] && TAR_EMOJI="✅" || TAR_EMOJI="❌"
-          [ "$NEON_STATUS" == "ok" ] && NEON_EMOJI="✅" || NEON_EMOJI="❌"
+          if [ "$CAL_STATUS" == "ok" ]; then
+            CAL_EMOJI="✅"
+          else
+            CAL_EMOJI="❌"
+          fi
+          
+          if [ "$TAR_STATUS" == "ok" ]; then
+            TAR_EMOJI="✅"
+          else
+            TAR_EMOJI="❌"
+          fi
+          
+          if [ "$NEON_STATUS" == "ok" ]; then
+            NEON_EMOJI="✅"
+          else
+            NEON_EMOJI="❌"
+          fi
           
           # Título baseado no status geral
           if [ "$CAL_STATUS" != "ok" ] || [ "$TAR_STATUS" != "ok" ] || [ "$NEON_STATUS" != "ok" ]; then
@@ -200,18 +214,20 @@ jobs:
           # Monta a mensagem
           MSG="$TITULO
           
-📅 *Data:* $TIMESTAMP
-
-📊 *Status das APIs:*
-
-$CAL_EMOJI *API Calendário:* $CAL_STATUS (código: ${{ steps.check_calendario.outputs.status_code }})
-$TAR_EMOJI *API Tarefas:* $TAR_STATUS (código: ${{ steps.check_tarefas.outputs.status_code }})
-$NEON_EMOJI *Banco Neon:* $NEON_STATUS (código: ${{ steps.check_neon.outputs.status_code }})
-
-📎 Relatório completo em anexo.
-🔄 Próxima verificação em 15 minutos."
+          📅 *Data:* $TIMESTAMP
           
-          echo "TELEGRAM_MSG=$MSG" >> $GITHUB_ENV
+          📊 *Status das APIs:*
+          
+          $CAL_EMOJI *API Calendário:* $CAL_STATUS (código: ${{ steps.check_calendario.outputs.status_code }})
+          $TAR_EMOJI *API Tarefas:* $TAR_STATUS (código: ${{ steps.check_tarefas.outputs.status_code }})
+          $NEON_EMOJI *Banco Neon:* $NEON_STATUS (código: ${{ steps.check_neon.outputs.status_code }})
+          
+          📎 Relatório completo em anexo.
+          🔄 Próxima verificação em 15 minutos."
+          
+          echo "TELEGRAM_MSG<<EOF" >> $GITHUB_ENV
+          echo "$MSG" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
           echo "✅ Mensagem preparada"
 
       - name: 🤖 Enviar notificação para Telegram
@@ -230,7 +246,7 @@ $NEON_EMOJI *Banco Neon:* $NEON_STATUS (código: ${{ steps.check_neon.outputs.st
           # Envia a mensagem
           RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
             -d "chat_id=$TELEGRAM_CHAT_ID" \
-            -d "text=$TELEGRAM_MSG" \
+            -d "text=${{ env.TELEGRAM_MSG }}" \
             -d "parse_mode=Markdown")
           
           if echo "$RESPONSE" | grep -q '"ok":true'; then
@@ -250,7 +266,7 @@ $NEON_EMOJI *Banco Neon:* $NEON_STATUS (código: ${{ steps.check_neon.outputs.st
           
           RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
             -d "chat_id=$TELEGRAM_GROUP_ID" \
-            -d "text=$TELEGRAM_MSG" \
+            -d "text=${{ env.TELEGRAM_MSG }}" \
             -d "parse_mode=Markdown")
           
           if echo "$RESPONSE" | grep -q '"ok":true'; then
