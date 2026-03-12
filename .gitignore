@@ -3,6 +3,10 @@
 binaria.py
 
 *teste*
+*test_*
+test_bot.py
+test_updates.py
+test_*.py
 
 dist
 
