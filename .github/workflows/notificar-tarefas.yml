@@ -9,6 +9,9 @@ on:
     - cron: '0 21 * * *'   # 18:00 BRT (21:00 UTC) - Resumo final
   workflow_dispatch:        # Permite execução manual - sim
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 permissions:
   contents: read
   issues: write
