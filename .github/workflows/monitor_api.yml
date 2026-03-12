@@ -1,133 +1,125 @@
-0name: 🚑 Monitoramento da API
+name: 📊 Monitor de APIs - Unimed RV
 
 on:
   schedule:
-    # Executa a cada 5 minutos
-    - cron: '*/5 * * * *'
-
-  workflow_dispatch:
-
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
-permissions:
-  contents: read
-  issues: write
-
-concurrency:
-  group: monitor-api
-  cancel-in-progress: true
+    - cron: '*/15 * * * *'  # A cada 15 minutos
+  workflow_dispatch:  # Permite execução manual
 
 jobs:
-  health-check:
-    name: 🔎 Verificar Status da API
+  monitor:
+    name: 🔍 Verificar APIs
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
 
-      # -------------------------------------------------------
-      # 1. Verificar secrets
-      # -------------------------------------------------------
-      - name: 🔐 Verificar Secrets
-        env:
-          API_URL_TAREFAS: ${{ secrets.API_URL_TAREFAS }}
-          TOKEN_TELEGRAM: ${{ secrets.TOKEN_TELEGRAM }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      - name: 🔍 Verificar API Calendário
+        id: check_calendario
+        continue-on-error: true
         run: |
-          for secret in API_URL_TAREFAS TOKEN_TELEGRAM TELEGRAM_CHAT_ID; do
-            if [ -z "${!secret}" ]; then
-              echo "❌ Secret $secret não configurado!"
-              exit 1
-            fi
-          done
-
-          echo "✅ Secrets verificados"
-
-      # -------------------------------------------------------
-      # 2. Testar API
-      # -------------------------------------------------------
-      - name: 🌐 Testar API
-        id: health
-        env:
-          API_URL: ${{ secrets.API_URL_TAREFAS }}
-        run: |
-
-          echo "🔎 Testando API..."
-
-          STATUS=$(curl -o /dev/null -s -w "%{http_code}" \
-            --max-time 10 \
-            "$API_URL/health")
-
-          echo "status=$STATUS" >> $GITHUB_OUTPUT
-
-          if [ "$STATUS" = "200" ]; then
-            echo "✅ API está funcionando"
+          echo "🔍 Verificando API Calendário..."
+          curl -s -o /dev/null -w "%{http_code}" https://web-apitarefas.up.railway.app/prestadores \
+            -H "x-token: ${{ secrets.API_TOKEN }}" \
+            | tee status_calendario.txt
+          if [ $(cat status_calendario.txt) -eq 200 ]; then
+            echo "✅ API Calendário OK"
+            echo "status=ok" >> $GITHUB_OUTPUT
           else
-            echo "❌ API retornou status $STATUS"
-            exit 1
+            echo "❌ API Calendário falhou"
+            echo "status=error" >> $GITHUB_OUTPUT
           fi
 
-      # -------------------------------------------------------
-      # 3. Enviar alerta Telegram se falhar
-      # -------------------------------------------------------
-      - name: 📩 Enviar alerta Telegram
-        if: failure()
-        env:
-          TOKEN_TELEGRAM: ${{ secrets.TOKEN_TELEGRAM }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+      - name: 🔍 Verificar API Tarefas
+        id: check_tarefas
+        continue-on-error: true
         run: |
+          echo "🔍 Verificando API Tarefas..."
+          curl -s -o /dev/null -w "%{http_code}" https://web-apitarefas.up.railway.app/tarefas-app/usuarios \
+            -H "x-token: ${{ secrets.API_TOKEN_TAREFAS }}" \
+            | tee status_tarefas.txt
+          if [ $(cat status_tarefas.txt) -eq 200 ]; then
+            echo "✅ API Tarefas OK"
+            echo "status=ok" >> $GITHUB_OUTPUT
+          else
+            echo "❌ API Tarefas falhou"
+            echo "status=error" >> $GITHUB_OUTPUT
+          fi
 
-          DATA=$(TZ=America/Sao_Paulo date)
+      - name: 📊 Verificar Banco Neon
+        id: check_neon
+        continue-on-error: true
+        run: |
+          echo "🔍 Verificando conexão com Neon..."
+          # Usa o endpoint de health check da API
+          curl -s -o /dev/null -w "%{http_code}" https://web-apitarefas.up.railway.app/health \
+            | tee status_neon.txt
+          if [ $(cat status_neon.txt) -eq 200 ]; then
+            echo "✅ Neon OK"
+            echo "status=ok" >> $GITHUB_OUTPUT
+          else
+            echo "❌ Neon falhou"
+            echo "status=error" >> $GITHUB_OUTPUT
+          fi
 
-          MESSAGE="🚨 *ALERTA: API FORA DO AR*
+      - name: 📝 Criar Relatório
+        id: relatorio
+        run: |
+          echo "# 📊 Relatório de Monitoramento das APIs" > report.md
+          echo "" >> report.md
+          echo "## 📅 Data e Hora" >> report.md
+          echo "$(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S')" >> report.md
+          echo "" >> report.md
+          
+          echo "## 📊 Status das APIs" >> report.md
+          echo "" >> report.md
+          
+          if [ "${{ steps.check_calendario.outputs.status }}" == "ok" ]; then
+            echo "✅ **API Calendário:** Online" >> report.md
+          else
+            echo "❌ **API Calendário:** Offline" >> report.md
+          fi
+          
+          if [ "${{ steps.check_tarefas.outputs.status }}" == "ok" ]; then
+            echo "✅ **API Tarefas:** Online" >> report.md
+          else
+            echo "❌ **API Tarefas:** Offline" >> report.md
+          fi
+          
+          if [ "${{ steps.check_neon.outputs.status }}" == "ok" ]; then
+            echo "✅ **Banco Neon:** Conectado" >> report.md
+          else
+            echo "❌ **Banco Neon:** Desconectado" >> report.md
+          fi
+          
+          echo "" >> report.md
+          echo "---" >> report.md
+          echo "" >> report.md
+          echo "🔄 Próxima verificação em 15 minutos" >> report.md
 
-📅 Data: $DATA
-⚠️ A API de tarefas não respondeu corretamente.
+      - name: 📤 Upload do Relatório
+        uses: actions/upload-artifact@v4
+        with:
+          name: monitor-report
+          path: report.md
+          retention-days: 7
 
-🔎 Verifique o servidor imediatamente."
-
-          curl -s -X POST \
-          "https://api.telegram.org/bot$TOKEN_TELEGRAM/sendMessage" \
-          -d chat_id="$TELEGRAM_CHAT_ID" \
-          -d text="$MESSAGE" \
-          -d parse_mode="Markdown"
-
-      # -------------------------------------------------------
-      # 4. Criar issue automática
-      # -------------------------------------------------------
-      - name: 🐞 Criar Issue
-        if: failure()
+      - name: 📨 Criar Issue se alguma API falhar
+        if: steps.check_calendario.outputs.status != 'ok' || steps.check_tarefas.outputs.status != 'ok' || steps.check_neon.outputs.status != 'ok'
         uses: actions/github-script@v7
         with:
           script: |
-
-            const data = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-
-            const issues = await github.rest.issues.listForRepo({
+            const fs = require('fs');
+            const report = fs.readFileSync('report.md', 'utf8');
+            
+            const title = `🚨 Falha no Monitoramento - ${new Date().toLocaleDateString('pt-BR')}`;
+            const body = report;
+            
+            await github.rest.issues.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              labels: 'api-down',
-              state: 'open'
+              title: title,
+              body: body,
+              labels: ['monitoring', 'bug']
             });
-
-            if (issues.data.length === 0) {
-
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: `🚨 API fora do ar - ${data}`,
-                body: `
-A automação detectou que a API não respondeu corretamente.
-
-Data/Hora: ${data}
-
-Verifique o servidor da aplicação.
-
-Run:
-${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}
-`,
-                labels: ['bug','api-down','monitoramento']
-              });
-
-            }
