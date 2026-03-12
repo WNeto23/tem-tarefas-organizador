@@ -47,7 +47,6 @@ jobs:
             --max-time 10)
           
           echo "status_code=$HTTP_CODE" >> $GITHUB_OUTPUT
-          echo "http_code=$HTTP_CODE" >> $GITHUB_ENV
           
           if [ "$HTTP_CODE" -eq 200 ]; then
             echo "✅ API Calendário OK (200)"
@@ -68,7 +67,6 @@ jobs:
             --max-time 10)
           
           echo "status_code=$HTTP_CODE" >> $GITHUB_OUTPUT
-          echo "http_code_tarefas=$HTTP_CODE" >> $GITHUB_ENV
           
           if [ "$HTTP_CODE" -eq 200 ]; then
             echo "✅ API Tarefas OK (200)"
@@ -88,7 +86,6 @@ jobs:
             --max-time 10)
           
           echo "status_code=$HTTP_CODE" >> $GITHUB_OUTPUT
-          echo "http_code_neon=$HTTP_CODE" >> $GITHUB_ENV
           
           if [ "$HTTP_CODE" -eq 200 ]; then
             echo "✅ Neon OK (200)"
@@ -111,25 +108,31 @@ jobs:
           if [ "${{ steps.check_calendario.outputs.status }}" == "ok" ]; then
             CALENDARIO_STATUS="✅ Online"
             CALENDARIO_EMOJI="✅"
+            CALENDARIO_DETALHE=""
           else
-            CALENDARIO_STATUS="❌ Offline (código: ${{ steps.check_calendario.outputs.status_code }})"
+            CALENDARIO_STATUS="❌ Offline"
             CALENDARIO_EMOJI="❌"
+            CALENDARIO_DETALHE=" (código: ${{ steps.check_calendario.outputs.status_code }})"
           fi
           
           if [ "${{ steps.check_tarefas.outputs.status }}" == "ok" ]; then
             TAREFAS_STATUS="✅ Online"
             TAREFAS_EMOJI="✅"
+            TAREFAS_DETALHE=""
           else
-            TAREFAS_STATUS="❌ Offline (código: ${{ steps.check_tarefas.outputs.status_code }})"
+            TAREFAS_STATUS="❌ Offline"
             TAREFAS_EMOJI="❌"
+            TAREFAS_DETALHE=" (código: ${{ steps.check_tarefas.outputs.status_code }})"
           fi
           
           if [ "${{ steps.check_neon.outputs.status }}" == "ok" ]; then
             NEON_STATUS="✅ Conectado"
             NEON_EMOJI="✅"
+            NEON_DETALHE=""
           else
-            NEON_STATUS="❌ Desconectado (código: ${{ steps.check_neon.outputs.status_code }})"
+            NEON_STATUS="❌ Desconectado"
             NEON_EMOJI="❌"
+            NEON_DETALHE=" (código: ${{ steps.check_neon.outputs.status_code }})"
           fi
           
           # Verifica se alguma falhou
@@ -172,7 +175,7 @@ jobs:
           retention-days: 30
 
       # =================================================================
-      # NOTIFICAÇÕES TELEGRAM
+      # NOTIFICAÇÕES TELEGRAM - CHAT PESSOAL
       # =================================================================
       
       - name: 🤖 Preparar mensagem para Telegram
@@ -211,22 +214,18 @@ jobs:
             TITULO="✅ *Monitoramento OK*"
           fi
           
-          # Monta a mensagem
-          MSG="$TITULO
-          
-          📅 *Data:* $TIMESTAMP
-          
-          📊 *Status das APIs:*
-          
-          $CAL_EMOJI *API Calendário:* $CAL_STATUS (código: ${{ steps.check_calendario.outputs.status_code }})
-          $TAR_EMOJI *API Tarefas:* $TAR_STATUS (código: ${{ steps.check_tarefas.outputs.status_code }})
-          $NEON_EMOJI *Banco Neon:* $NEON_STATUS (código: ${{ steps.check_neon.outputs.status_code }})
-          
-          📎 Relatório completo em anexo.
-          🔄 Próxima verificação em 15 minutos."
+          # Monta a mensagem (sem caracteres especiais que possam quebrar)
+          MSG="$TITULO\n\n"
+          MSG="${MSG}📅 *Data:* $TIMESTAMP\n\n"
+          MSG="${MSG}📊 *Status das APIs:*\n\n"
+          MSG="${MSG}$CAL_EMOJI *API Calendário:* $CAL_STATUS (código: ${{ steps.check_calendario.outputs.status_code }})\n"
+          MSG="${MSG}$TAR_EMOJI *API Tarefas:* $TAR_STATUS (código: ${{ steps.check_tarefas.outputs.status_code }})\n"
+          MSG="${MSG}$NEON_EMOJI *Banco Neon:* $NEON_STATUS (código: ${{ steps.check_neon.outputs.status_code }})\n\n"
+          MSG="${MSG}📎 Relatório completo em anexo.\n"
+          MSG="${MSG}🔄 Próxima verificação em 15 minutos."
           
           echo "TELEGRAM_MSG<<EOF" >> $GITHUB_ENV
-          echo "$MSG" >> $GITHUB_ENV
+          echo -e "$MSG" >> $GITHUB_ENV
           echo "EOF" >> $GITHUB_ENV
           echo "✅ Mensagem preparada"
 
@@ -256,8 +255,23 @@ jobs:
             echo "$RESPONSE"
           fi
 
-      - name: 🤖 Enviar notificação para grupo (opcional)
-        if: always() && secrets.TELEGRAM_GROUP_ID != ''
+      # =================================================================
+      # NOTIFICAÇÕES TELEGRAM - GRUPO (executa apenas se o secret existir)
+      # =================================================================
+      
+      - name: 🤖 Verificar se grupo está configurado
+        id: check_group
+        run: |
+          if [ -n "${{ secrets.TELEGRAM_GROUP_ID }}" ]; then
+            echo "group_configured=true" >> $GITHUB_OUTPUT
+            echo "✅ Grupo configurado"
+          else
+            echo "group_configured=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ Grupo não configurado"
+          fi
+
+      - name: 🤖 Enviar notificação para grupo
+        if: steps.check_group.outputs.group_configured == 'true'
         env:
           TELEGRAM_TOKEN: ${{ secrets.TOKEN_TELEGRAM }}
           TELEGRAM_GROUP_ID: ${{ secrets.TELEGRAM_GROUP_ID }}
