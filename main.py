@@ -2,14 +2,12 @@ import flet as ft
 import asyncio
 import secrets
 import string
+import threading
 from datetime import datetime
 from dotenv import load_dotenv
 import os
 
-# ── IMPORTS CORRIGIDOS ───────────────────────────────────────────────
 from tarefas_api_client import UsuarioModel, TarefaModel
-# ─────────────────────────────────────────────────────────────────────
-
 from components.login_card import criar_login_card
 from components.cadastro_card import criar_cadastro_card
 from components.esqueci_senha_card import criar_esqueci_senha_card
@@ -20,6 +18,9 @@ from utils.telegram_service import TelegramService
 from utils.rodape import criar_rodape
 from utils.notificacao_service import NotificacaoService
 from utils.card_nova_tarefa import abrir_modal_nova_tarefa
+from version import VERSION                          # ← NOVO
+from updater import verificar_atualizacao            # ← NOVO
+from update_dialog import mostrar_dialogo_atualizacao  # ← NOVO
 
 load_dotenv()
 
@@ -31,7 +32,7 @@ def main(page: ft.Page):
     page.window.min_width  = 900
     page.window.min_height = 600
     page.window.resizable  = True
-    page.title             = "Tem Tarefas? - Organizador"
+    page.title             = f"Tem Tarefas? - Organizador v{VERSION}"  # ← NOVO
     page.bgcolor           = "#121212"
     page.padding           = 0
 
@@ -60,11 +61,9 @@ def main(page: ft.Page):
     # ── INICIALIZA OS MODELS DA API ───────────────────────────────────
     user_model   = UsuarioModel()
     tarefa_model = TarefaModel()
-    # ─────────────────────────────────────────────────────────────────
 
     TOKEN        = os.getenv("TOKEN_TELEGRAM")
     bot_telegram = TelegramService(TOKEN)
-
     notificacao_service = NotificacaoService(
         tarefa_model=tarefa_model,
         usuario_model=user_model,
@@ -74,9 +73,22 @@ def main(page: ft.Page):
 
     def ao_fechar_app(e):
         notificacao_service.parar()
-        # Não precisa fechar conexão de banco, apenas para o scheduler
 
     page.on_close = ao_fechar_app
+
+    # ── AUTO-ATUALIZAÇÃO ─────────────────────────────────────────────
+    def checar_atualizacao_bg():
+        import time
+        time.sleep(3)  # aguarda o app terminar de carregar
+        info = verificar_atualizacao()
+        if info:
+            mostrar_dialogo_atualizacao(
+                page, info,
+                AMARELO_BANANA, CINZA_FUNDO, CINZA_CARD,
+            )
+
+    threading.Thread(target=checar_atualizacao_bg, daemon=True).start()
+    # ─────────────────────────────────────────────────────────────────
 
     def mostrar_snack(texto, cor):
         snack = ft.SnackBar(
@@ -127,34 +139,32 @@ def main(page: ft.Page):
     def ir_para_esqueci_senha(e):
         page.go("/esqueci_senha")
 
-    # ── FUNÇÃO DE LOGIN CORRIGIDA ─────────────────────────────────────
+    # ── LOGIN ─────────────────────────────────────────────────────────
     async def realizar_login(e, usuario_input, senha_input, container_login):
         if not usuario_input.value or not senha_input.value:
             mostrar_snack("Preencha os campos para entrar!", ft.Colors.ORANGE_700)
             return
-        
+
         mostrar_loading(True)
         try:
-            # Chama o método do proxy que usa a API
             usuario_logado = user_model.verificar_login(
                 usuario_input.value, senha_input.value
             )
-            
+
             if usuario_logado:
                 page.session.set("user_id",   usuario_logado["id"])
                 page.session.set("user_name", usuario_logado["nome_completo"])
                 page.session.set("user_foto", usuario_logado.get("foto"))
-                
-                # Arquiva tarefas antigas em background (agora via API)
+
                 asyncio.create_task(
                     asyncio.to_thread(
                         tarefa_model.arquivar_tarefas_antigas, usuario_logado["id"]
                     )
                 )
-                
+
                 id_telegram_db = usuario_logado.get("telegram_chat_id")
                 page.session.set("user_telegram", id_telegram_db)
-                
+
                 if id_telegram_db:
                     agora = datetime.now().strftime("%H:%M - %d/%m/%Y")
                     bot_telegram.enviar_mensagem(
@@ -167,50 +177,49 @@ def main(page: ft.Page):
                         f"🖥️ *Plataforma:* Organizador Desktop\n\n"
                         f"🟡 _Se não reconhece este acesso, revise suas credenciais._"
                     )
-                
+
                 container_login.opacity = 0
                 container_login.scale   = 0.9
                 page.update()
                 await asyncio.sleep(0.3)
-                
+
                 if usuario_logado.get("trocar_senha"):
+                    mostrar_loading(False)
                     exibir_tela_redefinir()
                 else:
                     page.go("/dashboard")
             else:
                 mostrar_snack("Usuário ou senha incorretos!", ft.Colors.RED_700)
                 mostrar_loading(False)
-                
+
         except Exception as ex:
-            print(f"Erro detalhado: {ex}")  # Log para debug
+            print(f"Erro detalhado: {ex}")
             mostrar_snack(f"Erro ao conectar com o servidor: {str(ex)}", ft.Colors.RED_900)
             mostrar_loading(False)
 
     def realizar_login_handler(e, usuario_input, senha_input, container_login):
         page.run_task(realizar_login, e, usuario_input, senha_input, container_login)
 
-    # ── FUNÇÃO DE RECUPERAÇÃO CORRIGIDA ───────────────────────────────
+    # ── RECUPERAÇÃO DE SENHA ──────────────────────────────────────────
     async def processar_recuperacao_temporaria(e, email_campo, canal):
         email = email_campo.value
-        
+
         try:
-            # Busca dados do usuário via API
             dados_user = user_model.buscar_dados_por_email(email)
-            
+
             if dados_user:
                 caracteres = string.ascii_letters + string.digits
                 senha_temp = "".join(secrets.choice(caracteres) for _ in range(8))
-                
-                # Define senha temporária via API
+
                 if user_model.definir_senha_temporaria(email, senha_temp):
                     chat_id, nome_user = dados_user
-                    
-                    enviou_email = False
+
+                    enviou_email    = False
                     enviou_telegram = False
-                    
+
                     if canal in ("email", "ambos"):
                         enviou_email = enviar_email_recuperacao(email, senha_temp)
-                    
+
                     if canal in ("telegram", "ambos"):
                         if chat_id:
                             bot_telegram.enviar_mensagem(
@@ -230,21 +239,21 @@ def main(page: ft.Page):
                             )
                             enviar_email_recuperacao(email, senha_temp)
                             enviou_email = True
-                    
+
                     if enviou_email and enviou_telegram:
                         mostrar_snack("Senha enviada por E-mail e Telegram!", ft.Colors.GREEN_700)
                     elif enviou_telegram:
                         mostrar_snack("Senha enviada pelo Telegram!", ft.Colors.GREEN_700)
                     elif enviou_email:
                         mostrar_snack(f"Senha enviada para {email}!", ft.Colors.GREEN_700)
-                    
+
                     ir_para_login()
                 else:
                     mostrar_snack("Erro ao gerar senha temporária.", ft.Colors.RED_700)
             else:
                 email_campo.error_text = "E-mail não encontrado."
                 email_campo.update()
-                
+
         except Exception as ex:
             mostrar_snack(f"Erro na recuperação: {str(ex)}", ft.Colors.RED_900)
 
@@ -258,17 +267,16 @@ def main(page: ft.Page):
                 confirma_input.error_text = "As senhas não coincidem"
                 page.update()
                 return
-            
+
             user_id = page.session.get("user_id")
-            
-            # Atualiza senha via API
+
             if user_model.atualizar_senha_definitiva(user_id, nova_input.value):
                 mostrar_snack("Senha atualizada! Bem-vindo.", ft.Colors.GREEN_700)
                 mostrar_loading(True)
                 page.go("/dashboard")
             else:
                 mostrar_snack("Erro ao atualizar senha.", ft.Colors.RED_700)
-            
+
             page.update()
 
         redefinir_card = criar_redefinir_card(
@@ -283,28 +291,26 @@ def main(page: ft.Page):
         if not all([nome_completo.value, usuario.value, email.value, senha.value]):
             mostrar_snack("Por favor, preencha todos os campos!", ft.Colors.ORANGE_700)
             return
-        
+
         try:
-            # Verificações via API
             if user_model.verificar_usuario_existe(usuario.value):
                 mostrar_snack("Este nome de usuário já está em uso.", ft.Colors.RED_700)
                 return
-            
+
             if user_model.verificar_email_existe(email.value):
                 mostrar_snack("Este e-mail já está cadastrado.", ft.Colors.RED_700)
                 return
-            
-            # Cadastro via API
+
             user_id = user_model.cadastrar(
                 nome_completo.value, usuario.value, email.value, senha.value, foto
             )
-            
+
             if user_id:
                 mostrar_snack("Conta criada com sucesso!", ft.Colors.GREEN_700)
                 ir_para_login()
             else:
                 mostrar_snack("Erro ao criar conta.", ft.Colors.RED_700)
-                
+
         except Exception as ex:
             mostrar_snack(f"Erro ao cadastrar: {ex}", ft.Colors.RED_900)
 
@@ -312,43 +318,32 @@ def main(page: ft.Page):
     def vincular_telegram_automatico(e):
         codigo = "".join(secrets.choice(string.digits) for _ in range(6))
         page.session.set("codigo_vinculo_telegram", codigo)
-        
-        # LOG PARA DEBUG
         print(f"🔵 Código gerado: {codigo}")
 
         def ao_confirmar_codigo(e):
             codigo_digitado = campo_codigo.value.strip()
             codigo_esperado = page.session.get("codigo_vinculo_telegram")
-            
             print(f"🔵 Comparando: '{codigo_digitado}' vs '{codigo_esperado}'")
-            
+
             if codigo_digitado != codigo_esperado:
                 mostrar_snack("Código inválido. Tente novamente.", ft.Colors.RED_700)
                 return
-            
-            # Mostra mensagem de aguarde
+
             mostrar_snack("Verificando mensagens no Telegram...", ft.Colors.BLUE_700)
-            
-            # 👇 MUDANÇA: Passa o código esperado para o método
             chat_id, nome_telegram = bot_telegram.capturar_id_automatico(codigo_esperado)
             print(f"🔵 Resultado: chat_id={chat_id}, nome={nome_telegram}")
-            
+
             if chat_id:
                 user_id = page.session.get("user_id")
-                
-                # Vincula via API
                 if user_model.vincular_telegram(user_id, str(chat_id)):
                     page.session.set("user_telegram", str(chat_id))
                     page.session.remove("codigo_vinculo_telegram")
-                    
-                    # Envia mensagem de confirmação
                     bot_telegram.enviar_mensagem(
                         chat_id,
                         f"✅ *Vínculo Confirmado!*\n\n"
                         f"Olá {nome_telegram}, seu Telegram agora está conectado ao "
                         f"*Tem Tarefas?*. Você receberá alertas de tarefas por aqui.",
                     )
-                    
                     dialogo.open = False
                     page.update()
                     mostrar_snack(
@@ -372,7 +367,7 @@ def main(page: ft.Page):
             keyboard_type=ft.KeyboardType.NUMBER,
             max_length=6,
         )
-        
+
         dialogo = ft.AlertDialog(
             modal=True,
             bgcolor=CINZA_CARD,
@@ -410,7 +405,7 @@ def main(page: ft.Page):
                 ),
             ],
         )
-        
+
         page.overlay.append(dialogo)
         dialogo.open = True
         page.update()
@@ -418,15 +413,15 @@ def main(page: ft.Page):
     # ── ROTEAMENTO ────────────────────────────────────────────────────
     def route_change(e):
         rota = page.route
-        
+
         if rota == "/dashboard":
             if page.views and page.views[-1].route == "/dashboard":
                 mostrar_loading(False)
                 return
-            
+
             page.views.clear()
             page.on_vincular_telegram = vincular_telegram_automatico
-            
+
             dash = criar_dashboard(
                 page=page,
                 AMARELO_BANANA=AMARELO_BANANA,
@@ -437,14 +432,13 @@ def main(page: ft.Page):
             )
             page.views.append(dash)
             mostrar_loading(False)
-            
+
         elif rota == "/arquivo_morto":
-            # Implementar se necessário
             pass
-            
+
         else:
             page.views.clear()
-            
+
             if rota == "/login":
                 page.views.append(
                     view_auth(
@@ -487,7 +481,7 @@ def main(page: ft.Page):
                         ),
                     )
                 )
-        
+
         page.update()
 
     def view_pop(e):
@@ -497,7 +491,7 @@ def main(page: ft.Page):
             page.go(top.route)
 
     page.on_route_change = route_change
-    page.on_view_pop = view_pop
+    page.on_view_pop     = view_pop
     page.go("/login")
 
 

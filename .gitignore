@@ -15,3 +15,5 @@ icon
 .venv/
 __pycache__/
 *.pyc
+
+build.ps1

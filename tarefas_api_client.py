@@ -4,63 +4,47 @@ tarefas_api_client.py
 Cliente HTTP para o sistema Tem Tarefas?.
 Substitui as chamadas diretas ao banco (UsuarioModel / TarefaModel)
 por chamadas à API FastAPI no Railway.
-
 Variáveis no .env:
   API_URL_TAREFAS   → URL base da API
   API_TOKEN_TAREFAS → Token de autenticação
-
-Interface mantida idêntica aos models originais para que
-main.py e dashboard.py precisem do mínimo de alterações.
 """
 import os
 import requests
 import json
 from datetime import datetime, date
 from dotenv import load_dotenv
-
 load_dotenv()
 
-_URL   = os.getenv("API_URL_TAREFAS", "https://web-apitarefas.up.railway.app")
-_TOKEN = os.getenv("API_TOKEN_TAREFAS", "")
+_URL     = os.getenv("API_URL_TAREFAS", "https://web-apitarefas.up.railway.app")
+_TOKEN   = os.getenv("API_TOKEN_TAREFAS", "")
 _HEADERS = {
     "x-token": _TOKEN,
     "Content-Type": "application/json",
-    "Accept": "application/json"
+    "Accept": "application/json",
 }
 _TIMEOUT = 30
 
 
 def _request(method, endpoint, **kwargs):
-    """Faz requisição com tratamento de erro melhorado"""
     url = f"{_URL}{endpoint}"
     print(f"🔵 {method} {url}")
-    print(f"🔵 Headers: { {k:v for k,v in _HEADERS.items() if k != 'x-token'} }")
-    
+    print(f"🔵 Headers: { {k: v for k, v in _HEADERS.items() if k != 'x-token'} }")
     try:
-        if 'json' in kwargs:
+        if "json" in kwargs:
             print(f"🔵 Dados: {kwargs['json']}")
-        
         response = requests.request(
-            method=method,
-            url=url,
-            headers=_HEADERS,
-            timeout=_TIMEOUT,
-            **kwargs
+            method=method, url=url, headers=_HEADERS,
+            timeout=_TIMEOUT, **kwargs
         )
         print(f"🟢 Resposta: {response.status_code}")
-        
         if response.status_code == 405:
             print(f"🔴 Método não permitido. Allow: {response.headers.get('Allow', 'N/A')}")
-            
         response.raise_for_status()
         return response.json() if response.content else {}
-        
     except requests.Timeout:
-        print(f"🔴 Timeout após {_TIMEOUT}s: {url}")
         raise Exception(f"Servidor não respondeu (timeout de {_TIMEOUT}s)")
-    except requests.ConnectionError as e:
-        print(f"🔴 Erro de conexão: {e}")
-        raise Exception(f"Não foi possível conectar ao servidor.")
+    except requests.ConnectionError:
+        raise Exception("Não foi possível conectar ao servidor.")
     except requests.HTTPError as e:
         print(f"🔴 HTTP {e.response.status_code}: {e.response.text}")
         if e.response.status_code == 401:
@@ -70,7 +54,6 @@ def _request(method, endpoint, **kwargs):
         else:
             raise
     except json.JSONDecodeError as e:
-        print(f"🔴 Erro ao decodificar JSON: {e}")
         raise Exception("Resposta inválida do servidor")
     except Exception as e:
         print(f"🔴 Erro inesperado: {e}")
@@ -96,7 +79,6 @@ def _delete(endpoint):
 # ══════════════════════════════════════════════════════════════════════
 # PROXY: UsuarioModel
 # ══════════════════════════════════════════════════════════════════════
-
 class UsuarioModel:
     """Proxy da API para substituir o UsuarioModel original."""
 
@@ -104,95 +86,62 @@ class UsuarioModel:
         pass
 
     def cadastrar(self, nome_completo, nome_usuario, email, senha, foto=None) -> int:
-        """
-        Cadastra um novo usuário usando o endpoint /auth/registrar
-        que aceita todos os campos, incluindo senha.
-        """
-        try:
-            print(f"🔵 Cadastrando usuário: {nome_usuario}")
-            
-            r = _post("/tarefas-app/auth/registrar", {
-                "nome_completo": nome_completo,
-                "nome_usuario": nome_usuario,
-                "email": email,
-                "senha": senha,
-                "foto": foto or "",
-            })
-            
-            return r["id"]
-            
-        except Exception as e:
-            print(f"🔴 Erro no cadastro: {e}")
-            raise
+        print(f"🔵 Cadastrando usuário: {nome_usuario}")
+        r = _post("/tarefas-app/auth/registrar", {
+            "nome_completo": nome_completo,
+            "nome_usuario":  nome_usuario,
+            "email":         email,
+            "senha":         senha,
+            "foto":          foto or "",
+        })
+        return r["id"]
 
     def verificar_login(self, usuario: str, senha: str) -> dict | None:
-        """
-        Verifica login do usuário via JWT.
-        """
+        print(f"🔵 Verificando login para: {usuario}")
         try:
-            print(f"🔵 Verificando login para: {usuario}")
-            
-            resultado = _post("/tarefas-app/auth/login", {
+            r = _post("/tarefas-app/auth/login", {
                 "usuario": usuario,
-                "senha": senha,
+                "senha":   senha,
             })
-            
-            print(f"🟢 Login bem-sucedido!")
-            
+            print("🟢 Login bem-sucedido!")
             return {
-                'id': resultado["user_id"],
-                'nome_completo': resultado["nome_completo"],
-                'nome_usuario': resultado["nome_usuario"],
-                'email': resultado["email"],
-                'trocar_senha': resultado.get("trocar_senha", False),
-                'foto': resultado.get("foto"),
-                'telegram_chat_id': resultado.get("telegram_chat_id"),
+                "id":             r["user_id"],
+                "nome_completo":  r["nome_completo"],
+                "nome_usuario":   r["nome_usuario"],
+                "email":          r["email"],
+                "trocar_senha":   r.get("trocar_senha", False),
+                "foto":           r.get("foto"),
+                "telegram_chat_id": r.get("telegram_chat_id"),
             }
-            
         except requests.HTTPError as e:
             if e.response.status_code == 401:
-                print(f"🟡 Credenciais inválidas")
                 return None
-            print(f"🔴 Erro HTTP: {e}")
             raise
         except Exception as e:
-            print(f"🔴 Erro inesperado: {e}")
+            if "401" in str(e) or "autenticação" in str(e).lower():
+                return None
             raise
 
     def verificar_usuario_existe(self, nome_usuario: str) -> bool:
-        """
-        Verifica se nome de usuário já existe usando a listagem.
-        """
         try:
             usuarios = _get("/tarefas-app/usuarios")
-            for u in usuarios:
-                if u.get("nome") == nome_usuario:
-                    return True
-            return False
+            # BUG CORRIGIDO: campo correto é "nome_usuario", não "nome"
+            return any(u.get("nome_usuario") == nome_usuario for u in usuarios)
         except:
             return False
 
     def verificar_email_existe(self, email: str) -> bool:
-        """
-        Verifica se email já existe.
-        """
         try:
             usuarios = _get("/tarefas-app/usuarios")
-            for u in usuarios:
-                if u.get("email") == email:
-                    return True
-            return False
+            return any(u.get("email") == email for u in usuarios)
         except:
             return False
 
     def definir_senha_temporaria(self, email: str, senha_temp: str) -> bool:
-        """
-        Define uma senha temporária para o usuário.
-        """
         try:
             print(f"🔵 Definindo senha temporária para: {email}")
             _post("/tarefas-app/auth/senha-temporaria", {
-                "email": email,
+                "email":      email,
                 "senha_temp": senha_temp,
             })
             return True
@@ -202,139 +151,105 @@ class UsuarioModel:
     def atualizar_senha_definitiva(self, user_id: int, nova_senha: str) -> bool:
         """
         Atualiza para senha definitiva.
+        Endpoint: PUT /tarefas-app/auth/atualizar-senha
+        Body: { "user_id": ..., "nova_senha": ... }
         """
         try:
             print(f"🔵 Atualizando senha do usuário {user_id}")
             _put("/tarefas-app/auth/atualizar-senha", {
-                "user_id": user_id,
+                "user_id":    user_id,
                 "nova_senha": nova_senha,
             })
             return True
-        except:
+        except Exception as e:
+            print(f"🔴 Erro ao atualizar senha: {e}")
             return False
 
     def buscar_dados_por_email(self, email: str) -> tuple | None:
-        """
-        Retorna (telegram_chat_id, nome_completo) pelo e-mail.
-        """
+        """Retorna (telegram_chat_id, nome_completo) pelo e-mail."""
         try:
             print(f"🔵 Buscando dados por email: {email}")
             usuarios = _get("/tarefas-app/usuarios")
             for u in usuarios:
                 if u.get("email") == email:
-                    return (u.get("telegram_chat_id"), u.get("nome"))
+                    # BUG CORRIGIDO: campo correto é "nome_completo", não "nome"
+                    return (u.get("telegram_chat_id"), u.get("nome_completo"))
             return None
-        except Exception:
+        except:
             return None
 
     def buscar_dados_por_email_ou_id(self, user_id: int) -> dict | None:
-        """
-        Busca usuário por ID
-        """
         try:
             print(f"🔵 Buscando usuário por ID: {user_id}")
             return _get(f"/tarefas-app/usuarios/{user_id}")
-        except Exception:
+        except:
             return None
 
     def vincular_telegram(self, user_id: int, telegram_id) -> bool:
-        """
-        Vincula Telegram ao usuário via API.
-        """
         try:
             print(f"🔵 Vinculando Telegram ao usuário {user_id} com chat_id {telegram_id}")
-            
-            resultado = _post("/tarefas-app/usuarios/telegram", {
-                "user_id": user_id,
-                "telegram_id": str(telegram_id)
+            _post("/tarefas-app/usuarios/telegram", {
+                "user_id":     user_id,
+                "telegram_id": str(telegram_id),
             })
-            
-            print(f"🟢 Telegram vinculado com sucesso!")
+            print("🟢 Telegram vinculado com sucesso!")
             return True
-            
-        except requests.HTTPError as e:
-            if e.response.status_code == 404:
-                print(f"🔴 Usuário não encontrado")
-            else:
-                print(f"🔴 Erro HTTP: {e}")
-            return False
         except Exception as e:
-            print(f"🔴 Erro inesperado: {e}")
+            print(f"🔴 Erro ao vincular Telegram: {e}")
             return False
 
     def buscar_telegram_id(self, user_id: int) -> str | None:
-        """
-        Busca Telegram ID do usuário via API.
-        """
         try:
             print(f"🔵 Buscando Telegram ID do usuário {user_id}")
-            resultado = _get(f"/tarefas-app/usuarios/{user_id}/telegram")
-            return resultado.get("telegram_chat_id")
-        except Exception as e:
-            print(f"🔴 Erro ao buscar Telegram ID: {e}")
+            r = _get(f"/tarefas-app/usuarios/{user_id}/telegram")
+            return r.get("telegram_chat_id")
+        except:
             return None
 
     def listar_usuarios_com_telegram(self) -> list:
-        """
-        Lista todos os usuários com Telegram via API.
-        """
         try:
-            print(f"🔵 Listando usuários com Telegram")
+            print("🔵 Listando usuários com Telegram")
             return _get("/tarefas-app/usuarios/telegram/todos")
-        except Exception as e:
-            print(f"🔴 Erro ao listar usuários com Telegram: {e}")
+        except:
             return []
 
     def atualizar_perfil(self, user_id: int, nome_completo: str, email: str, foto=None) -> bool:
-        """
-        Atualiza perfil do usuário.
-        """
         try:
             print(f"🔵 Atualizando perfil do usuário {user_id}")
             _put(f"/tarefas-app/usuarios/{user_id}", {
-                "nome": nome_completo,
+                "nome":  nome_completo,
                 "email": email,
-                "ativo": True
+                "ativo": True,
             })
             return True
-        except Exception:
+        except:
             return False
 
 
 # ══════════════════════════════════════════════════════════════════════
-# PROXY: TarefaModel — COMPLETO com todos os métodos
+# PROXY: TarefaModel
 # ══════════════════════════════════════════════════════════════════════
-
 class TarefaModel:
     """Proxy da API para substituir o TarefaModel original."""
 
     def criar_tabela(self):
         pass
 
-    def criar(self, usuario_id: int, titulo: str, descricao: str = None, status: str = "depois") -> int:
-        """
-        Cria uma nova tarefa.
-        """
+    def criar(self, usuario_id: int, titulo: str, descricao: str = None,
+              status: str = "depois") -> int:
         print(f"🔵 Criando tarefa para usuário {usuario_id}: {titulo}")
-        
-        dados = {
-            "titulo": titulo,
-            "descricao": descricao,
+        r = _post("/tarefas-app/tarefas", {
+            "titulo":      titulo,
+            "descricao":   descricao,
             "responsavel": None,
-            "usuario_id": usuario_id,
-            "data_vencimento": None,
-            "status": status,
-        }
-        
-        r = _post("/tarefas-app/tarefas", dados)
+            "usuario_id":  usuario_id,
+            "prazo":       None,
+            "status":      status,
+        })
         return r["id"]
 
     def listar_por_usuario(self, usuario_id: int) -> list:
-        """
-        Lista todas as tarefas do usuário.
-        """
         print(f"🔵 Listando tarefas do usuário {usuario_id}")
-        
         try:
             dados = _get(f"/tarefas-app/tarefas/{usuario_id}")
             return [self._dict_para_tupla(d) for d in dados]
@@ -343,11 +258,9 @@ class TarefaModel:
             return []
 
     def listar_nao_arquivadas(self, usuario_id: int) -> list:
-        """Lista tarefas não arquivadas"""
         return self.listar_por_usuario(usuario_id)
 
     def listar_arquivadas(self, usuario_id: int) -> list:
-        """Lista tarefas arquivadas"""
         try:
             print(f"🔵 Listando tarefas arquivadas do usuário {usuario_id}")
             dados = _get(f"/tarefas-app/tarefas/arquivadas/{usuario_id}")
@@ -357,26 +270,27 @@ class TarefaModel:
             return []
 
     def buscar_por_id(self, tarefa_id: int) -> dict | None:
-        """Busca tarefa por ID"""
         try:
             print(f"🔵 Buscando tarefa {tarefa_id}")
             d = _get(f"/tarefas-app/tarefas/detalhe/{tarefa_id}")
-            
-            if d.get("data_vencimento") and isinstance(d["data_vencimento"], str):
-                d["data_vencimento"] = date.fromisoformat(d["data_vencimento"])
-            if d.get("data_criacao") and isinstance(d["data_criacao"], str):
-                d["data_criacao"] = datetime.fromisoformat(d["data_criacao"])
-            if d.get("data_conclusao") and isinstance(d["data_conclusao"], str):
-                d["data_conclusao"] = datetime.fromisoformat(d["data_conclusao"])
-            
+            # Converte datas
+            for campo in ("data_vencimento",):
+                if d.get(campo) and isinstance(d[campo], str):
+                    try:
+                        d[campo] = date.fromisoformat(d[campo][:10])
+                    except:
+                        pass
+            for campo in ("data_criacao", "data_conclusao"):
+                if d.get(campo) and isinstance(d[campo], str):
+                    try:
+                        d[campo] = datetime.fromisoformat(d[campo])
+                    except:
+                        pass
             return d
         except Exception as e:
             print(f"🔴 Erro ao buscar tarefa: {e}")
             return None
 
-    # =================================================================
-    # NOVO MÉTODO ADICIONADO: atualizar_detalhes
-    # =================================================================
     def atualizar_detalhes(
         self,
         tarefa_id: int,
@@ -389,31 +303,46 @@ class TarefaModel:
     ) -> bool:
         """
         Atualiza os detalhes completos de uma tarefa.
-        Usa o endpoint PUT /tarefas/{tarefa_id}
+        Endpoint: PUT /tarefas-app/tarefas/{tarefa_id}
+
+        ATENÇÃO: O campo "fase" do detalhe é diferente do "status" do kanban.
+        O PUT espera um "status" válido (pendente, em_andamento, etc.).
+        A fase visual ("Em análise", etc.) é atualizada pelo PATCH /fase separadamente.
+        Por isso mandamos status="em_andamento" como padrão e atualizamos
+        só os campos de detalhe aqui.
         """
         try:
             print(f"🔵 Atualizando detalhes da tarefa {tarefa_id}")
-            
-            # Prepara os dados para enviar à API
-            dados = {
-                "titulo": titulo,
-                "descricao": descricao_longa,
-                "responsavel": responsavel,
-                "usuario_id": None,  # Não altera o usuário
-                "prazo": data_vencimento.isoformat() if data_vencimento else None,
-                "status": fase,  # Mapeia fase para status
-            }
-            
-            _put(f"/tarefas-app/tarefas/{tarefa_id}", dados)
+
+            # Converte data para string ISO se necessário
+            prazo_str = None
+            if data_vencimento:
+                if isinstance(data_vencimento, (date, datetime)):
+                    prazo_str = data_vencimento.isoformat()
+                else:
+                    prazo_str = str(data_vencimento)
+
+            # BUG CORRIGIDO: não mapear "fase" para "status"
+            # O PUT atualiza os campos de detalhe; status não muda aqui.
+            # Primeiro busca o status atual para não sobrescrever.
+            tarefa_atual = self.buscar_por_id(tarefa_id)
+            status_atual = tarefa_atual.get("status", "em_andamento") if tarefa_atual else "em_andamento"
+
+            _put(f"/tarefas-app/tarefas/{tarefa_id}", {
+                "titulo":      titulo,
+                "descricao":   descricao_longa,
+                "responsavel": responsavel or "",
+                "usuario_id":  tarefa_atual.get("usuario_id") if tarefa_atual else None,
+                "prazo":       prazo_str,
+                "status":      status_atual,   # mantém o status atual do kanban
+            })
             print(f"🟢 Detalhes da tarefa {tarefa_id} atualizados com sucesso")
             return True
-            
         except Exception as e:
             print(f"🔴 Erro ao atualizar detalhes: {e}")
             return False
 
     def atualizar_status(self, tarefa_id: int, novo_status: str) -> bool:
-        """Atualiza o status da tarefa"""
         try:
             print(f"🔵 Atualizando status da tarefa {tarefa_id} para {novo_status}")
             _patch(f"/tarefas-app/tarefas/{tarefa_id}/status", {"status": novo_status})
@@ -423,10 +352,6 @@ class TarefaModel:
             return False
 
     def atualizar_fase(self, tarefa_id: int, nova_fase: str) -> bool:
-        """
-        Atualiza apenas a fase da tarefa.
-        Usa o endpoint específico PATCH /tarefas/{tarefa_id}/fase
-        """
         try:
             print(f"🔵 Atualizando fase da tarefa {tarefa_id} para {nova_fase}")
             _patch(f"/tarefas-app/tarefas/{tarefa_id}/fase", {"fase": nova_fase})
@@ -436,7 +361,6 @@ class TarefaModel:
             return False
 
     def excluir(self, tarefa_id: int) -> bool:
-        """Exclui tarefa"""
         try:
             print(f"🔵 Excluindo tarefa {tarefa_id}")
             _delete(f"/tarefas-app/tarefas/{tarefa_id}")
@@ -446,7 +370,6 @@ class TarefaModel:
             return False
 
     def arquivar_manual(self, tarefa_id: int) -> bool:
-        """Arquiva tarefa manualmente"""
         try:
             print(f"🔵 Arquivando tarefa {tarefa_id}")
             _patch(f"/tarefas-app/tarefas/{tarefa_id}/arquivar")
@@ -456,7 +379,6 @@ class TarefaModel:
             return False
 
     def restaurar_do_arquivo(self, tarefa_id: int) -> bool:
-        """Restaura tarefa do arquivo"""
         try:
             print(f"🔵 Restaurando tarefa {tarefa_id}")
             _patch(f"/tarefas-app/tarefas/{tarefa_id}/restaurar")
@@ -466,7 +388,6 @@ class TarefaModel:
             return False
 
     def excluir_permanentemente(self, tarefa_id: int) -> bool:
-        """Exclui tarefa permanentemente"""
         try:
             print(f"🔵 Excluindo permanentemente tarefa {tarefa_id}")
             _delete(f"/tarefas-app/tarefas/{tarefa_id}/permanente")
@@ -476,7 +397,6 @@ class TarefaModel:
             return False
 
     def arquivar_tarefas_antigas(self, usuario_id=None) -> int:
-        """Arquiva tarefas antigas (se o endpoint existir)"""
         try:
             print(f"🔵 Arquivando tarefas antigas do usuário {usuario_id}")
             r = _post("/tarefas-app/tarefas/arquivar-antigas", {"usuario_id": usuario_id})
@@ -486,56 +406,37 @@ class TarefaModel:
             return 0
 
     # =================================================================
-    # MÉTODOS DE CHECKLIST
+    # CHECKLIST
     # =================================================================
 
     def checklist_listar(self, tarefa_id: int) -> list:
-        """
-        Lista todos os itens de checklist de uma tarefa.
-        Retorna lista de tuplas (id, texto, concluido)
-        """
         try:
             print(f"🔵 Listando checklist da tarefa {tarefa_id}")
             dados = _get(f"/tarefas-app/tarefas/{tarefa_id}/checklist")
-            
             return [(item["id"], item["texto"], item["concluido"]) for item in dados]
         except Exception as e:
             print(f"🔴 Erro ao listar checklist: {e}")
             return []
 
     def checklist_adicionar(self, tarefa_id: int, texto: str) -> int:
-        """
-        Adiciona um novo item ao checklist.
-        Retorna o ID do item criado.
-        """
         try:
             print(f"🔵 Adicionando item ao checklist da tarefa {tarefa_id}: {texto}")
-            resultado = _post(f"/tarefas-app/tarefas/{tarefa_id}/checklist", {
-                "texto": texto
-            })
-            return resultado["id"]
+            r = _post(f"/tarefas-app/tarefas/{tarefa_id}/checklist", {"texto": texto})
+            return r["id"]
         except Exception as e:
             print(f"🔴 Erro ao adicionar item ao checklist: {e}")
             raise
 
     def checklist_marcar(self, item_id: int, concluido: bool) -> bool:
-        """
-        Marca/desmarca um item do checklist.
-        """
         try:
             print(f"🔵 Marcando item {item_id} como {concluido}")
-            _patch(f"/tarefas-app/checklist/{item_id}", {
-                "concluido": concluido
-            })
+            _patch(f"/tarefas-app/checklist/{item_id}", {"concluido": concluido})
             return True
         except Exception as e:
             print(f"🔴 Erro ao marcar item do checklist: {e}")
             return False
 
     def checklist_excluir(self, item_id: int) -> bool:
-        """
-        Exclui um item do checklist.
-        """
         try:
             print(f"🔵 Excluindo item {item_id} do checklist")
             _delete(f"/tarefas-app/checklist/{item_id}")
@@ -562,7 +463,7 @@ class TarefaModel:
                 return date.fromisoformat(str(v)[:10])
             except:
                 return None
-                
+
         def parse_dt(v):
             if not v:
                 return None
@@ -572,7 +473,7 @@ class TarefaModel:
                 return datetime.fromisoformat(str(v))
             except:
                 return None
-        
+
         return (
             d.get("id"),
             d.get("titulo"),
@@ -585,9 +486,7 @@ class TarefaModel:
         )
 
     def _dict_para_tupla_arquivada(self, d: dict) -> tuple:
-        """Para tarefas arquivadas (inclui data_conclusao)"""
         t = self._dict_para_tupla(d)
-        from datetime import datetime
         def parse_dt(v):
             if not v:
                 return None

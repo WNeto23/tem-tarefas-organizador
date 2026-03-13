@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from tarefas_api_client import TarefaModel
 from models.tarefa import FASES_DISPONIVEIS
 from utils.tarefa_detalhe import criar_tarefa_detalhe_overlay
+from utils.perfil_card import criar_perfil_dialog
 # Configuração de debug
 DEBUG = True
 def log_debug(msg):
@@ -189,6 +190,18 @@ def criar_dashboard(
             stack_principal.controls.pop()
         stack_principal.controls.append(overlay)
         stack_principal.update()
+
+        # ── Perfil ────────────────────────────────────────────────────────────────
+    def ao_abrir_perfil(e):
+        log_debug("Abrindo perfil do usuário")
+        dialogo_perfil = criar_perfil_dialog(
+            page=page,
+            AMARELO_BANANA=AMARELO_BANANA,
+            CINZA_FUNDO=CINZA_FUNDO,
+            CINZA_CARD=CINZA_CARD,
+            user_model=user_model,
+        )
+        page.open(dialogo_perfil)
         
     def ao_abrir_arquivo_morto(e):
         log_debug("Abrindo arquivo morto")
@@ -209,7 +222,7 @@ def criar_dashboard(
         log_debug("Usuário saiu")
         page.session.clear()
         page.views.clear()
-        page.go("/")
+        page.go("/login")
         page.update()
     def vincular_click(e):
         log_debug("Vincular Telegram clicado")
@@ -230,7 +243,11 @@ def criar_dashboard(
                     radius=20,
                 ),
                 items=[
-                    ft.PopupMenuItem(icon=ft.Icons.PERSON, text="Perfil"),
+                    ft.PopupMenuItem(
+                        icon=ft.Icons.PERSON, 
+                        text="Perfil", 
+                        on_click=ao_abrir_perfil,
+                    ),
                     ft.PopupMenuItem(
                         icon=ft.Icons.SEND_SHARP,
                         text="Vincular Telegram",

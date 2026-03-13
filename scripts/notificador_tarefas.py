@@ -1,343 +1,332 @@
 """
 notificador_tarefas.py
-=====================
+======================
 Script executado pelo GitHub Actions para enviar notificações de tarefas.
-Envia mensagens para Telegram com base no horário:
-- 08:00: Resumo completo do dia
-- 09:00: Tarefas pendentes
-- 13:00: Tarefas urgentes (vencendo hoje/atrasadas)
-- 16:00: Pendências da tarde
-- 18:00: Resumo final
+Determina o tipo de notificação pela hora UTC recebida via env HORARIO_UTC,
+sem janela rígida de minutos — tolerante ao atraso do GitHub Actions.
+
+Horários BRT → UTC:
+  08:00 BRT = 11:00 UTC → resumo completo
+  09:00 BRT = 12:00 UTC → tarefas pendentes
+  13:00 BRT = 16:00 UTC → urgentes
+  16:00 BRT = 19:00 UTC → pendências da tarde
+  18:00 BRT = 21:00 UTC → resumo final
 """
 import os
 import requests
-import json
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 import pytz
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
-# Configurações
-API_URL = os.getenv("API_URL_TAREFAS", "https://web-apitarefas.up.railway.app")
-API_TOKEN = os.getenv("API_TOKEN_TAREFAS", "")
+# ── Configurações ─────────────────────────────────────────────────────
+API_URL        = os.getenv("API_URL_TAREFAS", "https://web-apitarefas.up.railway.app")
+API_TOKEN      = os.getenv("API_TOKEN_TAREFAS", "")
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "")
-TZ = pytz.timezone("America/Sao_Paulo")
+TZ             = pytz.timezone("America/Sao_Paulo")
 
-# Headers para API
 HEADERS = {
     "x-token": API_TOKEN,
     "Content-Type": "application/json",
-    "Accept": "application/json"
+    "Accept": "application/json",
 }
 
-# Status válidos
 STATUS_VALIDOS = ["pendente", "em_andamento", "concluida", "pra_ja", "depois", "se_der_tempo"]
-
-# Cores para emojis
-STATUS_EMOJI = {
-    "pra_ja": "🔥",
-    "depois": "📋",
+STATUS_EMOJI   = {
+    "pra_ja":       "🔥",
+    "depois":       "📋",
     "se_der_tempo": "🕐",
-    "pendente": "⏳",
+    "pendente":     "⏳",
     "em_andamento": "🔄",
-    "concluida": "✅"
+    "concluida":    "✅",
 }
 
+# Mapa hora UTC → (tipo, título)
+# O GitHub Actions dispara no horário UTC do cron.
+# Usamos só a HORA (sem minuto) para tolerar atrasos.
+HORARIOS_UTC = {
+    11: ("completo",  "RESUMO COMPLETO DO DIA"),
+    12: ("pendentes", "TAREFAS PENDENTES — MANHÃ"),
+    16: ("urgentes",  "ALERTA DE URGÊNCIA"),
+    19: ("tarde",     "PENDÊNCIAS DA TARDE"),
+    21: ("resumo",    "RESUMO FINAL DO DIA"),
+}
+
+
+# ── Helpers ───────────────────────────────────────────────────────────
 def log(msg: str):
-    """Log com timestamp"""
     agora = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
     print(f"[{agora}] {msg}")
 
+
 def get_usuarios_com_telegram() -> List[Dict]:
-    """Busca usuários com Telegram vinculado"""
     try:
-        url = f"{API_URL}/tarefas-app/usuarios/telegram/todos"
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        response.raise_for_status()
-        usuarios = response.json()
-        log(f"✅ Encontrados {len(usuarios)} usuários com Telegram")
+        r = requests.get(f"{API_URL}/tarefas-app/usuarios/telegram/todos",
+                         headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        usuarios = r.json()
+        log(f"✅ {len(usuarios)} usuário(s) com Telegram")
         return usuarios
     except Exception as e:
-        log(f"❌ Erro ao buscar usuários com Telegram: {e}")
+        log(f"❌ Erro ao buscar usuários: {e}")
         return []
 
+
 def get_tarefas_usuario(user_id: int) -> List[Dict]:
-    """Busca tarefas não arquivadas de um usuário"""
     try:
-        url = f"{API_URL}/tarefas-app/tarefas/{user_id}"
-        response = requests.get(url, headers=HEADERS, timeout=15)
-        response.raise_for_status()
-        tarefas = response.json()
-        log(f"✅ Usuário {user_id}: {len(tarefas)} tarefas encontradas")
+        r = requests.get(f"{API_URL}/tarefas-app/tarefas/{user_id}",
+                         headers=HEADERS, timeout=15)
+        r.raise_for_status()
+        tarefas = r.json()
+        log(f"✅ Usuário {user_id}: {len(tarefas)} tarefa(s)")
         return tarefas
     except Exception as e:
         log(f"❌ Erro ao buscar tarefas do usuário {user_id}: {e}")
         return []
 
+
 def enviar_telegram(chat_id: str, texto: str) -> bool:
-    """Envia mensagem via Telegram"""
-    if not TOKEN_TELEGRAM:
-        log("❌ TOKEN_TELEGRAM não configurado")
-        return False
-    
     try:
-        url = f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage"
-        payload = {
-            "chat_id": chat_id,
-            "text": texto,
-            "parse_mode": "Markdown",
-            "disable_web_page_preview": True
-        }
-        response = requests.post(url, json=payload, timeout=10)
-        response.raise_for_status()
-        log(f"✅ Mensagem enviada para chat_id {chat_id}")
+        r = requests.post(
+            f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage",
+            json={
+                "chat_id": chat_id,
+                "text": texto,
+                "parse_mode": "Markdown",
+                "disable_web_page_preview": True,
+            },
+            timeout=10,
+        )
+        r.raise_for_status()
+        log(f"✅ Mensagem enviada → {chat_id}")
         return True
     except Exception as e:
-        log(f"❌ Erro ao enviar Telegram para {chat_id}: {e}")
+        log(f"❌ Erro Telegram → {chat_id}: {e}")
         return False
 
+
+# ── Classificação ─────────────────────────────────────────────────────
 def classificar_tarefas(tarefas: List[Dict]) -> Dict:
-    """Classifica tarefas por categoria"""
     hoje = date.today()
-    
-    classificadas = {
-        "urgentes": [],      # atrasadas ou vencem hoje
-        "proximas": [],      # vencem em 1-3 dias
-        "futuras": [],       # vencem em mais de 3 dias
-        "sem_prazo": [],     # sem data de vencimento
-        "pendentes": [],     # todas não concluídas
-        "concluidas": [],    # concluídas
-        "por_status": {}     # organizado por status
+    resultado = {
+        "urgentes":   [],   # atrasadas ou vencem hoje → (titulo, dias_atraso)
+        "proximas":   [],   # vencem em 1-3 dias → (titulo, dias)
+        "sem_prazo":  [],   # sem data
+        "pendentes":  [],   # todas não concluídas (titulo)
+        "por_status": {s: [] for s in STATUS_VALIDOS},
     }
-    
-    # Inicializa por_status
-    for status in STATUS_VALIDOS:
-        classificadas["por_status"][status] = []
-    
+
     for t in tarefas:
         if not isinstance(t, dict):
             continue
-            
+
         titulo = t.get("titulo", "Sem título")
         status = t.get("status", "pendente")
-        fase = t.get("fase", "em_andamento")
-        data_venc = t.get("data_vencimento")
-        
-        # Adiciona à organização por status
-        if status in classificadas["por_status"]:
-            classificadas["por_status"][status].append(t)
-        
-        # Ignora concluídas/arquivadas
-        if fase in ["resolvido", "cancelado", "concluida"] or status == "concluida":
-            classificadas["concluidas"].append(titulo)
+        fase   = t.get("fase", "em_andamento")
+
+        if status in resultado["por_status"]:
+            resultado["por_status"][status].append(t)
+
+        # Ignora apenas quando REALMENTE finalizada:
+        # - status "concluida" → coluna concluída no kanban
+        # - fase "cancelado"   → cancelada explicitamente
+        #
+        # NOTIFICA tudo mais, incluindo:
+        # - status: pra_ja, depois, se_der_tempo, pendente, em_andamento
+        # - fase:   em_andamento, resolvido, parado, suspenso
+        # Uma tarefa "resolvido" ou "parado" ainda aparece no kanban
+        # e pode estar atrasada — deve ser notificada normalmente.
+        if status == "concluida" or fase == "cancelado":
             continue
-            
-        classificadas["pendentes"].append(titulo)
-        
+
+        resultado["pendentes"].append(titulo)
+
+        data_venc = t.get("data_vencimento")
         if data_venc:
             if isinstance(data_venc, str):
                 try:
-                    data_venc = date.fromisoformat(data_venc)
+                    data_venc = date.fromisoformat(data_venc[:10])
                 except:
+                    resultado["sem_prazo"].append(titulo)
                     continue
             dias = (data_venc - hoje).days
-            
-            if dias < 0:
-                classificadas["urgentes"].append((titulo, abs(dias)))
-            elif dias == 0:
-                classificadas["urgentes"].append((titulo, 0))
+            if dias <= 0:
+                resultado["urgentes"].append((titulo, abs(dias)))
             elif dias <= 3:
-                classificadas["proximas"].append((titulo, dias))
-            else:
-                classificadas["futuras"].append((titulo, dias))
+                resultado["proximas"].append((titulo, dias))
         else:
-            classificadas["sem_prazo"].append(titulo)
-    
-    return classificadas
+            resultado["sem_prazo"].append(titulo)
 
-def gerar_resumo_completo(nome: str, tarefas: List[Dict]) -> str:
-    """Gera resumo completo do dia (08:00)"""
+    return resultado
+
+
+# ── Mensagens ─────────────────────────────────────────────────────────
+def msg_resumo_completo(nome: str, tarefas: List[Dict]) -> str:
     hoje = datetime.now(TZ).strftime("%d/%m/%Y")
-    classificadas = classificar_tarefas(tarefas)
-    
+    c    = classificar_tarefas(tarefas)
+
     linhas = [
         f"📋 *RESUMO COMPLETO — {hoje}*",
         f"`{'─' * 30}`",
         f"",
-        f"Olá *{nome}*! Bom dia! 🌅",
-        f""
+        f"Bom dia, *{nome}*! 🌅",
+        f"",
     ]
-    
-    if classificadas["urgentes"]:
+
+    if c["urgentes"]:
         linhas.append("🚨 *URGENTES / ATRASADAS:*")
-        for titulo, dias in classificadas["urgentes"]:
-            if dias == 0:
-                linhas.append(f"  🔴 VENCE HOJE › {titulo}")
-            else:
-                linhas.append(f"  ⚠️ ATRASADA {dias}d › {titulo}")
+        for titulo, dias in c["urgentes"]:
+            linhas.append(f"  🔴 {'VENCE HOJE' if dias == 0 else f'ATRASADA {dias}d'} › {titulo}")
         linhas.append("")
-    
-    if classificadas["proximas"]:
+
+    if c["proximas"]:
         linhas.append("⏰ *VENCEM EM BREVE:*")
-        for titulo, dias in classificadas["proximas"]:
+        for titulo, dias in c["proximas"]:
             linhas.append(f"  🟡 {dias}d › {titulo}")
         linhas.append("")
-    
-    # Adiciona resumo por status
-    linhas.append("📊 *TAREFAS POR STATUS:*")
-    for status, lista in classificadas["por_status"].items():
-        if lista and status not in ["concluida"]:
+
+    linhas.append("📊 *POR STATUS:*")
+    for status, lista in c["por_status"].items():
+        if lista and status != "concluida":
             emoji = STATUS_EMOJI.get(status, "📌")
             linhas.append(f"  {emoji} {status.replace('_', ' ').title()}: {len(lista)}")
-    linhas.append("")
-    
-    total_pendentes = len(classificadas["pendentes"])
-    linhas.append(f"`{'─' * 30}`")
-    linhas.append(f"📊 Total pendente: {total_pendentes}")
-    linhas.append(f"🕒 Gerado às {datetime.now(TZ).strftime('%H:%M')}")
-    
+
+    linhas += [
+        "",
+        f"`{'─' * 30}`",
+        f"📌 Total pendente: {len(c['pendentes'])}",
+        f"🕒 {datetime.now(TZ).strftime('%H:%M')}",
+    ]
     return "\n".join(linhas)
 
-def gerar_resumo_pendentes(nome: str, tarefas: List[Dict], titulo: str) -> str:
-    """Gera resumo de pendências"""
-    classificadas = classificar_tarefas(tarefas)
-    
+
+def msg_pendentes(nome: str, tarefas: List[Dict], titulo: str) -> str:
+    c = classificar_tarefas(tarefas)
+
     linhas = [
         f"📋 *{titulo}*",
         f"`{'─' * 30}`",
         f"",
-        f"Olá *{nome}*, aqui estão suas pendências:",
-        f""
+        f"Olá *{nome}*, suas pendências:",
+        f"",
     ]
-    
-    if classificadas["pendentes"]:
-        for i, t in enumerate(classificadas["pendentes"][:10], 1):
+
+    if c["pendentes"]:
+        for i, t in enumerate(c["pendentes"][:10], 1):
             linhas.append(f"  {i}. {t}")
-        if len(classificadas["pendentes"]) > 10:
-            linhas.append(f"  ... e mais {len(classificadas['pendentes'])-10} tarefas")
+        if len(c["pendentes"]) > 10:
+            linhas.append(f"  _...e mais {len(c['pendentes']) - 10} tarefas_")
     else:
         linhas.append("  ✅ Nenhuma tarefa pendente!")
-    
-    linhas.append("")
-    linhas.append(f"`{'─' * 30}`")
-    linhas.append(f"📊 Total: {len(classificadas['pendentes'])} pendentes")
-    linhas.append(f"🕒 {datetime.now(TZ).strftime('%H:%M')}")
-    
+
+    linhas += [
+        "",
+        f"`{'─' * 30}`",
+        f"📌 Total: {len(c['pendentes'])} pendente(s)",
+        f"🕒 {datetime.now(TZ).strftime('%H:%M')}",
+    ]
     return "\n".join(linhas)
 
-def gerar_urgentes(nome: str, tarefas: List[Dict]) -> Optional[str]:
-    """Gera alerta de tarefas urgentes"""
-    classificadas = classificar_tarefas(tarefas)
-    
-    if not classificadas["urgentes"]:
+
+def msg_urgentes(nome: str, tarefas: List[Dict]) -> Optional[str]:
+    c = classificar_tarefas(tarefas)
+
+    if not c["urgentes"] and not c["proximas"]:
         return None
-    
+
     linhas = [
         f"🚨 *ALERTA DE URGÊNCIA*",
         f"`{'─' * 30}`",
         f"",
-        f"Olá *{nome}*, você tem tarefas urgentes:",
-        f""
+        f"Olá *{nome}*, atenção:",
+        f"",
     ]
-    
-    for titulo, dias in classificadas["urgentes"]:
-        if dias == 0:
-            linhas.append(f"  🔴 VENCE HOJE › {titulo}")
-        else:
-            linhas.append(f"  ⚠️ ATRASADA {dias}d › {titulo}")
-    
-    linhas.append("")
-    linhas.append(f"`{'─' * 30}`")
-    linhas.append(f"🕒 {datetime.now(TZ).strftime('%H:%M')}")
-    
+
+    for titulo, dias in c["urgentes"]:
+        linhas.append(f"  🔴 {'VENCE HOJE' if dias == 0 else f'ATRASADA {dias}d'} › {titulo}")
+
+    for titulo, dias in c["proximas"]:
+        linhas.append(f"  🟡 Vence em {dias}d › {titulo}")
+
+    linhas += [
+        "",
+        f"`{'─' * 30}`",
+        f"🕒 {datetime.now(TZ).strftime('%H:%M')}",
+    ]
     return "\n".join(linhas)
 
+
+# ── Main ──────────────────────────────────────────────────────────────
 def main():
     log("🚀 Iniciando notificador de tarefas")
-    
-    # Verifica token do Telegram
+
     if not TOKEN_TELEGRAM:
         log("❌ TOKEN_TELEGRAM não configurado")
         return
-    
-    # Verifica token da API
     if not API_TOKEN:
         log("❌ API_TOKEN_TAREFAS não configurado")
         return
-    
-    # Determina o tipo de notificação baseado no horário
-    agora = datetime.now(TZ)
-    hora = agora.hour
-    minuto = agora.minute
-    
-    # Mapeia horários para tipos de notificação
-    horarios = {
-        (8, 0, 15): ("completo", "RESUMO COMPLETO DO DIA"),
-        (9, 0, 15): ("pendentes", "TAREFAS PENDENTES - MANHÃ"),
-        (13, 0, 15): ("urgentes", "ALERTA DE URGÊNCIA"),
-        (16, 0, 15): ("tarde", "PENDÊNCIAS DA TARDE"),
-        (18, 0, 15): ("resumo", "RESUMO FINAL DO DIA"),
-    }
-    
-    tipo_notificacao = None
-    titulo_notificacao = None
-    
-    for (h, m_inicio, m_fim), (tipo, titulo) in horarios.items():
-        if hora == h and m_inicio <= minuto <= m_fim:
-            tipo_notificacao = tipo
-            titulo_notificacao = titulo
-            break
-    
-    if not tipo_notificacao:
-        log(f"⏰ Horário {hora:02d}:{minuto:02d} - sem notificação programada")
+
+    # Determina tipo pela hora UTC atual (tolerante a atrasos)
+    hora_utc = datetime.utcnow().hour
+    log(f"⏰ Hora UTC atual: {hora_utc:02d}h")
+
+    tipo, titulo_notif = HORARIOS_UTC.get(hora_utc, (None, None))
+
+    if not tipo:
+        # Tenta hora anterior (caso atraso de ~1h)
+        tipo, titulo_notif = HORARIOS_UTC.get(hora_utc - 1, (None, None))
+        if tipo:
+            log(f"⚠️  Horário exato não encontrado, usando hora anterior ({hora_utc - 1}h UTC)")
+
+    if not tipo:
+        log(f"⏰ Hora {hora_utc:02d}h UTC — sem notificação programada para este horário")
         return
-    
-    log(f"📋 Tipo de notificação: {tipo_notificacao} - {titulo_notificacao}")
-    
-    # Busca usuários com Telegram
+
+    log(f"📋 Tipo: {tipo} — {titulo_notif}")
+
     usuarios = get_usuarios_com_telegram()
-    
     if not usuarios:
-        log("⚠️ Nenhum usuário com Telegram encontrado")
+        log("⚠️  Nenhum usuário com Telegram")
         return
-    
-    # Processa cada usuário
+
     enviados = 0
-    falhas = 0
-    
+    falhas   = 0
+
     for usuario in usuarios:
-        user_id = usuario.get("id") or usuario.get("user_id")
-        nome = usuario.get("nome_completo") or usuario.get("nome", "Usuário")
+        user_id = usuario.get("id")
+        nome    = usuario.get("nome_completo") or usuario.get("nome", "Usuário")
         chat_id = usuario.get("telegram_chat_id")
-        
-        if not chat_id:
+
+        if not user_id or not chat_id:
+            log(f"⚠️  Usuário sem id ou chat_id: {usuario}")
             continue
-            
-        log(f"📱 Processando usuário: {nome} (ID: {user_id})")
-        
-        # Busca tarefas do usuário
+
+        log(f"📱 Processando: {nome} (ID: {user_id})")
+
         tarefas = get_tarefas_usuario(user_id)
-        
         if not tarefas:
-            log(f"ℹ️ Usuário {nome} não tem tarefas")
+            log(f"ℹ️  {nome} não tem tarefas")
             continue
-        
-        # Gera mensagem conforme o tipo
-        mensagem = None
-        if tipo_notificacao == "completo":
-            mensagem = gerar_resumo_completo(nome, tarefas)
-        elif tipo_notificacao in ["pendentes", "tarde", "resumo"]:
-            mensagem = gerar_resumo_pendentes(nome, tarefas, titulo_notificacao)
-        elif tipo_notificacao == "urgentes":
-            mensagem = gerar_urgentes(nome, tarefas)
-        
-        if mensagem:
-            log(f"📨 Enviando mensagem para {nome}...")
-            if enviar_telegram(chat_id, mensagem):
-                enviados += 1
-            else:
-                falhas += 1
-    
-    log(f"✅ Notificador finalizado: {enviados} enviados, {falhas} falhas")
+
+        if tipo == "completo":
+            mensagem = msg_resumo_completo(nome, tarefas)
+        elif tipo in ("pendentes", "tarde", "resumo"):
+            mensagem = msg_pendentes(nome, tarefas, titulo_notif)
+        elif tipo == "urgentes":
+            mensagem = msg_urgentes(nome, tarefas)
+            if not mensagem:
+                log(f"ℹ️  {nome} não tem tarefas urgentes — pulando")
+                continue
+        else:
+            continue
+
+        if enviar_telegram(chat_id, mensagem):
+            enviados += 1
+        else:
+            falhas += 1
+
+    log(f"✅ Finalizado: {enviados} enviado(s), {falhas} falha(s)")
+
 
 if __name__ == "__main__":
     main()

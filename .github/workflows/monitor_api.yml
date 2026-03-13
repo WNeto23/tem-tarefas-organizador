@@ -16,16 +16,7 @@ permissions:
 on:
   schedule:
     - cron: '0 */3 * * *'   # A cada 3 horas
-  workflow_dispatch:
-    inputs:
-      modo_teste:
-        description: 'Enviar mensagem de teste formatada no Telegram?'
-        required: false
-        default: 'false'
-        type: choice
-        options:
-          - 'false'
-          - 'true'
+  workflow_dispatch:         # Execução manual
 
 env:
   TZ: America/Sao_Paulo
@@ -47,94 +38,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y jq
 
       # =================================================================
-      # MODO TESTE - envia mensagem de exemplo e encerra
-      # =================================================================
-      - name: "🧪 Enviar mensagem de teste"
-        if: github.event.inputs.modo_teste == 'true'
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TOKEN_TELEGRAM }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: |
-          echo "🔍 Verificando token do Telegram..."
-          
-          if [ -z "$TELEGRAM_TOKEN" ]; then
-            echo "❌ TOKEN_TELEGRAM não configurado!"
-            exit 1
-          fi
-          
-          if [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "❌ TELEGRAM_CHAT_ID não configurado!"
-            exit 1
-          fi
-          
-          # Testa o token
-          echo "🔄 Testando token..."
-          RESPONSE=$(curl -s -w "\n%{http_code}" "https://api.telegram.org/bot$TELEGRAM_TOKEN/getMe")
-          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-          
-          if [ "$HTTP_CODE" -ne 200 ]; then
-            echo "❌ Token inválido! Código: $HTTP_CODE"
-            exit 1
-          fi
-          
-          TIMESTAMP=$(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S')
-          
-          # Criar mensagem de teste
-          cat > /tmp/msg_teste.txt << EOF
-          🧪 *TESTE DO MONITOR DE APIs*
-          
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          
-          📅 *Data:* $TIMESTAMP
-          
-          📊 *Status das APIs (SIMULADO):*
-          
-          ✅ API Calendário: Online (200)
-          ✅ API Tarefas: Online (200)
-          ✅ Banco Neon: Conectado (200)
-          
-          ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-          
-          📢 *Mensagem de teste*
-          
-          Se você recebeu esta mensagem, o Telegram está configurado corretamente.
-          
-          🔄 Monitoramento ativo a cada 3 horas.
-          EOF
-          
-          echo "📨 Mensagem de teste:"
-          echo "─────────────────────"
-          cat /tmp/msg_teste.txt
-          echo "─────────────────────"
-          
-          # Enviar para o Telegram
-          echo "📤 Enviando para Telegram..."
-          
-          JSON_PAYLOAD=$(jq -n \
-            --arg chat "$TELEGRAM_CHAT_ID" \
-            --arg text "$(cat /tmp/msg_teste.txt)" \
-            '{chat_id: $chat, text: $text, parse_mode: "Markdown"}')
-          
-          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
-            -H "Content-Type: application/json" \
-            -d "$JSON_PAYLOAD" \
-            --max-time 10)
-          
-          if echo "$RESPONSE" | grep -q '"ok":true'; then
-            echo "✅ Mensagem de teste enviada com sucesso!"
-          else
-            echo "❌ Falha ao enviar mensagem de teste:"
-            echo "$RESPONSE"
-            exit 1
-          fi
-          
-          exit 0
-
-      # =================================================================
-      # VERIFICACAO DAS APIS (pula se for modo teste)
+      # VERIFICACAO DAS APIS
       # =================================================================
       - name: "🔍 Verificar API Calendario"
-        if: github.event.inputs.modo_teste != 'true'
         id: check_calendario
         continue-on-error: true
         run: |
@@ -150,7 +56,6 @@ jobs:
           fi
 
       - name: "🔍 Verificar API Tarefas"
-        if: github.event.inputs.modo_teste != 'true'
         id: check_tarefas
         continue-on-error: true
         run: |
@@ -166,7 +71,6 @@ jobs:
           fi
 
       - name: "🔍 Verificar Banco Neon"
-        if: github.event.inputs.modo_teste != 'true'
         id: check_neon
         continue-on-error: true
         run: |
@@ -184,7 +88,6 @@ jobs:
       # RELATORIO
       # =================================================================
       - name: "📝 Criar Relatorio"
-        if: github.event.inputs.modo_teste != 'true'
         id: relatorio
         run: |
           TIMESTAMP=$(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S')
@@ -265,7 +168,6 @@ jobs:
           echo "─────────────────────"
 
       - name: "📤 Upload do Relatorio"
-        if: github.event.inputs.modo_teste != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: monitor-report-${{ github.run_id }}
@@ -276,7 +178,6 @@ jobs:
       # TELEGRAM
       # =================================================================
       - name: "📝 Preparar mensagem Telegram"
-        if: github.event.inputs.modo_teste != 'true'
         id: prepare_msg
         run: |
           TIMESTAMP=$(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S')
@@ -315,7 +216,6 @@ jobs:
           echo "─────────────────────"
 
       - name: "🔍 Verificar Token Telegram"
-        if: github.event.inputs.modo_teste != 'true'
         id: check_token
         env:
           TELEGRAM_TOKEN: ${{ secrets.TOKEN_TELEGRAM }}
@@ -339,7 +239,7 @@ jobs:
           fi
 
       - name: "📨 Enviar notificacao Telegram"
-        if: github.event.inputs.modo_teste != 'true' && steps.check_token.outputs.token_ok == 'true'
+        if: steps.check_token.outputs.token_ok == 'true'
         env:
           TELEGRAM_TOKEN: ${{ secrets.TOKEN_TELEGRAM }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
@@ -390,7 +290,7 @@ jobs:
           fi
 
       - name: "👥 Enviar para grupo Telegram"
-        if: github.event.inputs.modo_teste != 'true' && steps.check_token.outputs.token_ok == 'true'
+        if: steps.check_token.outputs.token_ok == 'true'
         env:
           TELEGRAM_TOKEN: ${{ secrets.TOKEN_TELEGRAM }}
           TELEGRAM_GROUP_ID: ${{ secrets.TELEGRAM_GROUP_ID }}
@@ -422,15 +322,14 @@ jobs:
           fi
 
       # =================================================================
-      # ISSUE (APENAS SE FALHAR) - AGORA COM A MENSAGEM FORMATADA
+      # ISSUE (APENAS SE FALHAR)
       # =================================================================
       - name: "📝 Preparar Issue com mensagem formatada"
-        if: github.event.inputs.modo_teste != 'true' && (steps.check_calendario.outputs.status != 'ok' || steps.check_tarefas.outputs.status != 'ok' || steps.check_neon.outputs.status != 'ok')
+        if: steps.check_calendario.outputs.status != 'ok' || steps.check_tarefas.outputs.status != 'ok' || steps.check_neon.outputs.status != 'ok'
         id: prepare_issue
         run: |
           TIMESTAMP=$(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S')
           
-          # Pega os status
           CAL_S="${{ steps.check_calendario.outputs.status }}"
           TAR_S="${{ steps.check_tarefas.outputs.status }}"
           NEO_S="${{ steps.check_neon.outputs.status }}"
@@ -438,38 +337,30 @@ jobs:
           TAR_C="${{ steps.check_tarefas.outputs.status_code }}"
           NEO_C="${{ steps.check_neon.outputs.status_code }}"
           
-          # Define emojis e textos
           if [ "$CAL_S" == "ok" ]; then
             CAL_ICON="✅"
             CAL_STATUS="Online"
-            CAL_COLOR="brightgreen"
           else
             CAL_ICON="❌"
             CAL_STATUS="Offline"
-            CAL_COLOR="red"
           fi
           
           if [ "$TAR_S" == "ok" ]; then
             TAR_ICON="✅"
             TAR_STATUS="Online"
-            TAR_COLOR="brightgreen"
           else
             TAR_ICON="❌"
             TAR_STATUS="Offline"
-            TAR_COLOR="red"
           fi
           
           if [ "$NEO_S" == "ok" ]; then
             NEO_ICON="✅"
             NEO_STATUS="Conectado"
-            NEO_COLOR="brightgreen"
           else
             NEO_ICON="❌"
             NEO_STATUS="Desconectado"
-            NEO_COLOR="red"
           fi
           
-          # Lista de APIs com falha
           FALHAS=""
           if [ "$CAL_S" != "ok" ]; then
             FALHAS="${FALHAS}- API Calendário (HTTP $CAL_C)\n"
@@ -481,7 +372,6 @@ jobs:
             FALHAS="${FALHAS}- Banco Neon (HTTP $NEO_C)\n"
           fi
           
-          # Criar issue com formatação melhorada
           cat > /tmp/issue_body.md << EOF
           ## 🚨 Falha Detectada no Monitoramento
           
@@ -509,18 +399,17 @@ jobs:
           
           ### 📋 Logs da Execução
           
-          Para mais detalhes, acesse os logs da execução:
           [${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
           
           ### ⚡ Ação Necessária
           
-          ##### Verificar as APIs que apresentaram falha:
+          **Verificar as APIs que apresentaram falha:**
           
           1. **API Calendário:** \`https://web-apitarefas.up.railway.app/calendario-app/prestadores\`
           2. **API Tarefas:** \`https://web-apitarefas.up.railway.app/tarefas-app/usuarios\`
           3. **Banco Neon:** \`https://web-apitarefas.up.railway.app/\`
           
-          ##### Possíveis causas:
+          **Possíveis causas:**
           - Token inválido ou expirado
           - API fora do ar
           - Problema de rede
@@ -537,14 +426,9 @@ jobs:
           ---
           🔄 *Este issue foi criado automaticamente pelo GitHub Actions.*
           EOF
-          
-          echo "✅ Issue preparada:"
-          echo "─────────────────────"
-          cat /tmp/issue_body.md
-          echo "─────────────────────"
 
       - name: "📝 Criar Issue com mensagem formatada"
-        if: github.event.inputs.modo_teste != 'true' && (steps.check_calendario.outputs.status != 'ok' || steps.check_tarefas.outputs.status != 'ok' || steps.check_neon.outputs.status != 'ok')
+        if: steps.check_calendario.outputs.status != 'ok' || steps.check_tarefas.outputs.status != 'ok' || steps.check_neon.outputs.status != 'ok'
         uses: actions/github-script@v7
         with:
           script: |
@@ -553,7 +437,6 @@ jobs:
             const today = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
             const now = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' });
             
-            // Verifica se já existe uma issue aberta similar
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -562,7 +445,6 @@ jobs:
             });
             
             if (issues.length === 0) {
-              // Cria nova issue com a mensagem formatada
               const { data: issue } = await github.rest.issues.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -573,7 +455,6 @@ jobs:
               
               console.log(`✅ Issue criada com sucesso: #${issue.number}`);
               
-              // Comenta com informações adicionais
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -584,7 +465,6 @@ jobs:
             } else {
               console.log(`ℹ️ Já existe uma issue aberta para monitoramento: #${issues[0].number}`);
               
-              // Adiciona um comentário na issue existente
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
