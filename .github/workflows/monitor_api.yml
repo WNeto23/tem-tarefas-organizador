@@ -227,7 +227,7 @@ jobs:
           fi
 
       - name: "Enviar para grupo Telegram"
-        if: github.event.inputs.modo_teste != 'true' && secrets.TELEGRAM_GROUP_ID != ''
+        if: github.event.inputs.modo_teste != 'true'
         env:
           TELEGRAM_TOKEN: ${{ secrets.TOKEN_TELEGRAM }}
           TELEGRAM_GROUP_ID: ${{ secrets.TELEGRAM_GROUP_ID }}
