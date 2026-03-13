@@ -126,16 +126,12 @@ def classificar_tarefas(tarefas: List[Dict]) -> Dict:
         if status in resultado["por_status"]:
             resultado["por_status"][status].append(t)
 
-        # Ignora apenas quando REALMENTE finalizada:
-        # - status "concluida" → coluna concluída no kanban
-        # - fase "cancelado"   → cancelada explicitamente
-        #
-        # NOTIFICA tudo mais, incluindo:
-        # - status: pra_ja, depois, se_der_tempo, pendente, em_andamento
-        # - fase:   em_andamento, resolvido, parado, suspenso
-        # Uma tarefa "resolvido" ou "parado" ainda aparece no kanban
-        # e pode estar atrasada — deve ser notificada normalmente.
-        if status == "concluida" or fase == "cancelado":
+        # Ignora quando não precisa de ação:
+        # - status "concluida"
+        # - fase "resolvido", "cancelado", "cancelada" ou "suspenso"
+        # Notifica apenas: fase "em_andamento" ou "parado"
+        fases_ignorar = ("resolvido", "cancelado", "cancelada", "suspenso")
+        if status == "concluida" or fase in fases_ignorar:
             continue
 
         resultado["pendentes"].append(titulo)
