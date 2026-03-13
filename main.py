@@ -22,7 +22,13 @@ from version import VERSION                          # ← NOVO
 from updater import verificar_atualizacao            # ← NOVO
 from update_dialog import mostrar_dialogo_atualizacao  # ← NOVO
 
-load_dotenv()
+# Carrega .env corretamente tanto em desenvolvimento quanto no executável
+import sys as _sys, os as _os
+if getattr(_sys, "frozen", False):
+    _base = _sys._MEIPASS
+else:
+    _base = _os.path.dirname(_os.path.abspath(__file__))
+load_dotenv(_os.path.join(_base, ".env"))
 
 
 def main(page: ft.Page):
@@ -32,7 +38,18 @@ def main(page: ft.Page):
     page.window.min_width  = 900
     page.window.min_height = 600
     page.window.resizable  = True
-    page.title             = f"Tem Tarefas? - Organizador v{VERSION}"  # ← NOVO
+    page.title             = f"Tem Tarefas? - Organizador v{VERSION}"
+
+    # Ícone da janela (substitui o ícone padrão do Flet)
+    import sys, os
+    if getattr(sys, "frozen", False):
+        # executável PyInstaller
+        base = sys._MEIPASS
+    else:
+        base = os.path.dirname(os.path.abspath(__file__))
+    icone_path = os.path.join(base, "icon", "icone.ico")
+    if os.path.exists(icone_path):
+        page.window.icon = icone_path  # ← NOVO
     page.bgcolor           = "#121212"
     page.padding           = 0
 

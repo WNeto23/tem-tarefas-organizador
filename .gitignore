@@ -7,6 +7,7 @@ binaria.py
 test_bot.py
 test_updates.py
 test_*.py
+converter_icone.py
 
 dist
 

@@ -22,7 +22,12 @@ from pathlib import Path
 from dotenv import load_dotenv
 from version import VERSION
 
-load_dotenv()
+import sys as _sys, os as _os
+if getattr(_sys, "frozen", False):
+    _base = _sys._MEIPASS
+else:
+    _base = _os.path.dirname(_os.path.abspath(__file__))
+load_dotenv(_os.path.join(_base, ".env"))
 
 _API_URL   = os.getenv("API_URL_TAREFAS", "https://web-apitarefas.up.railway.app")
 _TOKEN     = os.getenv("API_TOKEN_TAREFAS", "")
