@@ -1,6 +1,5 @@
-name: 📊 Monitor de APIs - Unimed RV
+name: "Monitor de APIs - Unimed RV"
 
-# 👇 PERMISSÕES CORRIGIDAS
 permissions:
   contents: read
   issues: write
@@ -16,158 +15,164 @@ permissions:
 
 on:
   schedule:
-    - cron: '*/15 * * * *'  # A cada 15 minutos
-  workflow_dispatch:  # Permite execução manual
+    - cron: '0 */3 * * *'   # A cada 3 horas
+  workflow_dispatch:
+    inputs:
+      modo_teste:
+        description: 'Enviar mensagem de teste formatada no Telegram?'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
 
 env:
   TZ: America/Sao_Paulo
 
 jobs:
   monitor:
-    name: 🔍 Verificar APIs
+    name: "Verificar APIs"
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
     steps:
-      - name: 📥 Checkout
+      - name: "Checkout"
         uses: actions/checkout@v4
 
       # =================================================================
-      # VERIFICAÇÃO DAS APIS
+      # MODO TESTE - envia mensagem de exemplo e encerra
       # =================================================================
-      
-      - name: 🔍 Verificar API Calendário
+
+      - name: "Enviar mensagem de teste"
+        if: github.event.inputs.modo_teste == 'true'
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TOKEN_TELEGRAM }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          TIMESTAMP=$(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S')
+
+          printf "🧪 TESTE DO MONITOR\n\nEsta e uma mensagem de teste do workflow.\nData: %s\n\n✅ API Calendario: Online (200)\n✅ API Tarefas: Online (200)\n✅ Banco Neon: Online (200)\n\nSe voce recebeu esta mensagem, o Telegram esta configurado corretamente.\n🔄 Monitoramento ativo a cada 3 horas." \
+            "$TIMESTAMP" > /tmp/msg_teste.txt
+
+          echo "=== Mensagem de teste ==="
+          cat /tmp/msg_teste.txt
+          echo "========================="
+
+          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --form-string "chat_id=${TELEGRAM_CHAT_ID}" \
+            --form-string "text=$(cat /tmp/msg_teste.txt)" \
+            --max-time 10)
+
+          if echo "$RESPONSE" | grep -q '"ok":true'; then
+            echo "Mensagem de teste enviada com sucesso!"
+          else
+            echo "Falha ao enviar mensagem de teste:"
+            echo "$RESPONSE"
+            exit 1
+          fi
+
+      # =================================================================
+      # VERIFICACAO DAS APIS (pula se for modo teste)
+      # =================================================================
+
+      - name: "Verificar API Calendario"
+        if: github.event.inputs.modo_teste != 'true'
         id: check_calendario
         continue-on-error: true
         run: |
-          echo "🔍 Verificando API Calendário..."
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            https://web-apitarefas.up.railway.app/prestadores \
+            https://web-apitarefas.up.railway.app/calendario-app/prestadores \
             -H "x-token: ${{ secrets.API_TOKEN }}" \
             --max-time 10)
-          
           echo "status_code=$HTTP_CODE" >> $GITHUB_OUTPUT
-          
           if [ "$HTTP_CODE" -eq 200 ]; then
-            echo "✅ API Calendário OK (200)"
             echo "status=ok" >> $GITHUB_OUTPUT
           else
-            echo "❌ API Calendário falhou ($HTTP_CODE)"
             echo "status=error" >> $GITHUB_OUTPUT
           fi
 
-      - name: 🔍 Verificar API Tarefas
+      - name: "Verificar API Tarefas"
+        if: github.event.inputs.modo_teste != 'true'
         id: check_tarefas
         continue-on-error: true
         run: |
-          echo "🔍 Verificando API Tarefas..."
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
             https://web-apitarefas.up.railway.app/tarefas-app/usuarios \
             -H "x-token: ${{ secrets.API_TOKEN_TAREFAS }}" \
             --max-time 10)
-          
           echo "status_code=$HTTP_CODE" >> $GITHUB_OUTPUT
-          
           if [ "$HTTP_CODE" -eq 200 ]; then
-            echo "✅ API Tarefas OK (200)"
             echo "status=ok" >> $GITHUB_OUTPUT
           else
-            echo "❌ API Tarefas falhou ($HTTP_CODE)"
             echo "status=error" >> $GITHUB_OUTPUT
           fi
 
-      - name: 🔍 Verificar Banco Neon
+      - name: "Verificar Banco Neon"
+        if: github.event.inputs.modo_teste != 'true'
         id: check_neon
         continue-on-error: true
         run: |
-          echo "🔍 Verificando conexão com Neon..."
           HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
-            https://web-apitarefas.up.railway.app/health \
+            https://web-apitarefas.up.railway.app/ \
             --max-time 10)
-          
           echo "status_code=$HTTP_CODE" >> $GITHUB_OUTPUT
-          
           if [ "$HTTP_CODE" -eq 200 ]; then
-            echo "✅ Neon OK (200)"
             echo "status=ok" >> $GITHUB_OUTPUT
           else
-            echo "❌ Neon falhou ($HTTP_CODE)"
             echo "status=error" >> $GITHUB_OUTPUT
           fi
 
       # =================================================================
-      # RELATÓRIO
+      # RELATORIO
       # =================================================================
-      
-      - name: 📝 Criar Relatório
+
+      - name: "Criar Relatorio"
+        if: github.event.inputs.modo_teste != 'true'
         id: relatorio
         run: |
           TIMESTAMP=$(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S')
-          
-          # Mapeia status para emojis
-          if [ "${{ steps.check_calendario.outputs.status }}" == "ok" ]; then
-            CALENDARIO_STATUS="✅ Online"
-            CALENDARIO_EMOJI="✅"
-            CALENDARIO_DETALHE=""
+          CAL_S="${{ steps.check_calendario.outputs.status }}"
+          TAR_S="${{ steps.check_tarefas.outputs.status }}"
+          NEO_S="${{ steps.check_neon.outputs.status }}"
+          CAL_C="${{ steps.check_calendario.outputs.status_code }}"
+          TAR_C="${{ steps.check_tarefas.outputs.status_code }}"
+          NEO_C="${{ steps.check_neon.outputs.status_code }}"
+
+          if [ "$CAL_S" == "ok" ]; then CAL_L="Online (OK)";     CAL_E="OK";   else CAL_L="Offline (ERRO)";     CAL_E="ERRO"; fi
+          if [ "$TAR_S" == "ok" ]; then TAR_L="Online (OK)";     TAR_E="OK";   else TAR_L="Offline (ERRO)";     TAR_E="ERRO"; fi
+          if [ "$NEO_S" == "ok" ]; then NEO_L="Conectado (OK)";  NEO_E="OK";   else NEO_L="Desconectado (ERRO)"; NEO_E="ERRO"; fi
+
+          if [ "$CAL_S" != "ok" ] || [ "$TAR_S" != "ok" ] || [ "$NEO_S" != "ok" ]; then
+            STATUS_GERAL="FALHA DETECTADA"
+            TITULO="ALERTA: Falha no Monitoramento"
           else
-            CALENDARIO_STATUS="❌ Offline"
-            CALENDARIO_EMOJI="❌"
-            CALENDARIO_DETALHE=" (código: ${{ steps.check_calendario.outputs.status_code }})"
+            STATUS_GERAL="TUDO OK"
+            TITULO="Monitoramento OK"
           fi
-          
-          if [ "${{ steps.check_tarefas.outputs.status }}" == "ok" ]; then
-            TAREFAS_STATUS="✅ Online"
-            TAREFAS_EMOJI="✅"
-            TAREFAS_DETALHE=""
-          else
-            TAREFAS_STATUS="❌ Offline"
-            TAREFAS_EMOJI="❌"
-            TAREFAS_DETALHE=" (código: ${{ steps.check_tarefas.outputs.status_code }})"
-          fi
-          
-          if [ "${{ steps.check_neon.outputs.status }}" == "ok" ]; then
-            NEON_STATUS="✅ Conectado"
-            NEON_EMOJI="✅"
-            NEON_DETALHE=""
-          else
-            NEON_STATUS="❌ Desconectado"
-            NEON_EMOJI="❌"
-            NEON_DETALHE=" (código: ${{ steps.check_neon.outputs.status_code }})"
-          fi
-          
-          # Verifica se alguma falhou
-          if [ "$CALENDARIO_EMOJI" == "❌" ] || [ "$TAREFAS_EMOJI" == "❌" ] || [ "$NEON_EMOJI" == "❌" ]; then
-            STATUS_GERAL="❌ *FALHA DETECTADA*"
-          else
-            STATUS_GERAL="✅ *TUDO OK*"
-          fi
-          
-          # Cria o relatório
+
           cat > report.md << EOF
-          # 📊 Relatório de Monitoramento das APIs
-
-          ## 📅 Data e Hora
-          $TIMESTAMP
-
-          ## 📊 Status das APIs
-
-          | API | Status | Código |
-          |-----|--------|--------|
-          | API Calendário | $CALENDARIO_STATUS | ${{ steps.check_calendario.outputs.status_code }} |
-          | API Tarefas | $TAREFAS_STATUS | ${{ steps.check_tarefas.outputs.status_code }} |
-          | Banco Neon | $NEON_STATUS | ${{ steps.check_neon.outputs.status_code }} |
-
-          ## 📈 Resumo
-          $STATUS_GERAL
-
+          # Relatorio de Monitoramento das APIs - Unimed RV
+          ## Data: $TIMESTAMP
+          | API            | Status           | Codigo HTTP |
+          |----------------|------------------|-------------|
+          | API Calendario | $CAL_L           | $CAL_C      |
+          | API Tarefas    | $TAR_L           | $TAR_C      |
+          | Banco Neon     | $NEO_L           | $NEO_C      |
+          ## Resultado: $STATUS_GERAL
           ---
-          🔄 Próxima verificação em 15 minutos
+          Proxima verificacao em 3 horas.
           EOF
-          
+
           echo "status_geral=$STATUS_GERAL" >> $GITHUB_OUTPUT
+          echo "titulo=$TITULO" >> $GITHUB_OUTPUT
+          echo "cal_e=$CAL_E" >> $GITHUB_OUTPUT
+          echo "tar_e=$TAR_E" >> $GITHUB_OUTPUT
+          echo "neo_e=$NEO_E" >> $GITHUB_OUTPUT
           cat report.md
 
-      - name: 📤 Upload do Relatório
+      - name: "Upload do Relatorio"
+        if: github.event.inputs.modo_teste != 'true'
         uses: actions/upload-artifact@v4
         with:
           name: monitor-report-${{ github.run_id }}
@@ -175,153 +180,99 @@ jobs:
           retention-days: 30
 
       # =================================================================
-      # NOTIFICAÇÕES TELEGRAM - CHAT PESSOAL
+      # TELEGRAM
       # =================================================================
-      
-      - name: 🤖 Preparar mensagem para Telegram
-        id: prepare_telegram
-        run: |
-          TIMESTAMP=$(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S')
-          
-          # Pega os status
-          CAL_STATUS="${{ steps.check_calendario.outputs.status }}"
-          TAR_STATUS="${{ steps.check_tarefas.outputs.status }}"
-          NEON_STATUS="${{ steps.check_neon.outputs.status }}"
-          
-          # Define emojis
-          if [ "$CAL_STATUS" == "ok" ]; then
-            CAL_EMOJI="✅"
-          else
-            CAL_EMOJI="❌"
-          fi
-          
-          if [ "$TAR_STATUS" == "ok" ]; then
-            TAR_EMOJI="✅"
-          else
-            TAR_EMOJI="❌"
-          fi
-          
-          if [ "$NEON_STATUS" == "ok" ]; then
-            NEON_EMOJI="✅"
-          else
-            NEON_EMOJI="❌"
-          fi
-          
-          # Título baseado no status geral
-          if [ "$CAL_STATUS" != "ok" ] || [ "$TAR_STATUS" != "ok" ] || [ "$NEON_STATUS" != "ok" ]; then
-            TITULO="🚨 *ALERTA: Falha no Monitoramento*"
-          else
-            TITULO="✅ *Monitoramento OK*"
-          fi
-          
-          # Monta a mensagem (sem caracteres especiais que possam quebrar)
-          MSG="$TITULO\n\n"
-          MSG="${MSG}📅 *Data:* $TIMESTAMP\n\n"
-          MSG="${MSG}📊 *Status das APIs:*\n\n"
-          MSG="${MSG}$CAL_EMOJI *API Calendário:* $CAL_STATUS (código: ${{ steps.check_calendario.outputs.status_code }})\n"
-          MSG="${MSG}$TAR_EMOJI *API Tarefas:* $TAR_STATUS (código: ${{ steps.check_tarefas.outputs.status_code }})\n"
-          MSG="${MSG}$NEON_EMOJI *Banco Neon:* $NEON_STATUS (código: ${{ steps.check_neon.outputs.status_code }})\n\n"
-          MSG="${MSG}📎 Relatório completo em anexo.\n"
-          MSG="${MSG}🔄 Próxima verificação em 15 minutos."
-          
-          echo "TELEGRAM_MSG<<EOF" >> $GITHUB_ENV
-          echo -e "$MSG" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
-          echo "✅ Mensagem preparada"
 
-      - name: 🤖 Enviar notificação para Telegram
-        if: always()
+      - name: "Enviar notificacao Telegram"
+        if: github.event.inputs.modo_teste != 'true'
         env:
           TELEGRAM_TOKEN: ${{ secrets.TOKEN_TELEGRAM }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           if [ -z "$TELEGRAM_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
-            echo "⚠️ TELEGRAM_TOKEN ou TELEGRAM_CHAT_ID não configurados"
+            echo "Secrets do Telegram nao configurados"
             exit 0
           fi
-          
-          echo "📨 Enviando notificação para Telegram..."
-          
-          # Envia a mensagem
-          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
-            -d "chat_id=$TELEGRAM_CHAT_ID" \
-            -d "text=${{ env.TELEGRAM_MSG }}" \
-            -d "parse_mode=Markdown")
-          
+
+          TIMESTAMP=$(TZ='America/Sao_Paulo' date '+%d/%m/%Y %H:%M:%S')
+          TITULO="${{ steps.relatorio.outputs.titulo }}"
+          CAL_E="${{ steps.relatorio.outputs.cal_e }}"
+          TAR_E="${{ steps.relatorio.outputs.tar_e }}"
+          NEO_E="${{ steps.relatorio.outputs.neo_e }}"
+          CAL_C="${{ steps.check_calendario.outputs.status_code }}"
+          TAR_C="${{ steps.check_tarefas.outputs.status_code }}"
+          NEO_C="${{ steps.check_neon.outputs.status_code }}"
+
+          printf "%s\n\nData: %s\n\nStatus das APIs:\n\n[%s] API Calendario (HTTP %s)\n[%s] API Tarefas    (HTTP %s)\n[%s] Banco Neon     (HTTP %s)\n\nProxima verificacao em 3 horas." \
+            "$TITULO" "$TIMESTAMP" \
+            "$CAL_E" "$CAL_C" \
+            "$TAR_E" "$TAR_C" \
+            "$NEO_E" "$NEO_C" \
+            > /tmp/telegram_msg.txt
+
+          echo "=== Mensagem a ser enviada ==="
+          cat /tmp/telegram_msg.txt
+          echo "=============================="
+
+          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --form-string "chat_id=${TELEGRAM_CHAT_ID}" \
+            --form-string "text=$(cat /tmp/telegram_msg.txt)" \
+            --max-time 10)
+
           if echo "$RESPONSE" | grep -q '"ok":true'; then
-            echo "✅ Notificação enviada com sucesso"
+            echo "Notificacao enviada com sucesso"
           else
-            echo "❌ Falha ao enviar notificação"
+            echo "Falha ao enviar notificacao:"
             echo "$RESPONSE"
           fi
 
-      # =================================================================
-      # NOTIFICAÇÕES TELEGRAM - GRUPO (executa apenas se o secret existir)
-      # =================================================================
-      
-      - name: 🤖 Verificar se grupo está configurado
-        id: check_group
-        run: |
-          if [ -n "${{ secrets.TELEGRAM_GROUP_ID }}" ]; then
-            echo "group_configured=true" >> $GITHUB_OUTPUT
-            echo "✅ Grupo configurado"
-          else
-            echo "group_configured=false" >> $GITHUB_OUTPUT
-            echo "ℹ️ Grupo não configurado"
-          fi
-
-      - name: 🤖 Enviar notificação para grupo
-        if: steps.check_group.outputs.group_configured == 'true'
+      - name: "Enviar para grupo Telegram"
+        if: github.event.inputs.modo_teste != 'true' && secrets.TELEGRAM_GROUP_ID != ''
         env:
           TELEGRAM_TOKEN: ${{ secrets.TOKEN_TELEGRAM }}
           TELEGRAM_GROUP_ID: ${{ secrets.TELEGRAM_GROUP_ID }}
         run: |
-          echo "📨 Enviando notificação para grupo..."
-          
-          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot$TELEGRAM_TOKEN/sendMessage" \
-            -d "chat_id=$TELEGRAM_GROUP_ID" \
-            -d "text=${{ env.TELEGRAM_MSG }}" \
-            -d "parse_mode=Markdown")
-          
+          if [ -z "${{ secrets.TELEGRAM_GROUP_ID }}" ]; then
+            echo "Grupo nao configurado, pulando"
+            exit 0
+          fi
+          RESPONSE=$(curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage" \
+            --form-string "chat_id=${TELEGRAM_GROUP_ID}" \
+            --form-string "text=$(cat /tmp/telegram_msg.txt)" \
+            --max-time 10)
           if echo "$RESPONSE" | grep -q '"ok":true'; then
-            echo "✅ Notificação enviada para o grupo"
+            echo "Notificacao enviada para o grupo"
           else
-            echo "❌ Falha ao enviar para o grupo"
+            echo "Falha ao enviar para o grupo"
           fi
 
       # =================================================================
-      # CRIAÇÃO DE ISSUE (APENAS SE FALHAR)
+      # ISSUE (APENAS SE FALHAR)
       # =================================================================
-      
-      - name: 📨 Criar Issue se alguma API falhar
-        if: steps.check_calendario.outputs.status != 'ok' || steps.check_tarefas.outputs.status != 'ok' || steps.check_neon.outputs.status != 'ok'
+
+      - name: "Criar Issue se alguma API falhar"
+        if: github.event.inputs.modo_teste != 'true' && (steps.check_calendario.outputs.status != 'ok' || steps.check_tarefas.outputs.status != 'ok' || steps.check_neon.outputs.status != 'ok')
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
             const report = fs.readFileSync('report.md', 'utf8');
-            
             const today = new Date().toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
-            const title = `🚨 Falha no Monitoramento - ${today}`;
-            
-            // Verifica se já existe uma issue aberta similar
             const { data: issues } = await github.rest.issues.listForRepo({
               owner: context.repo.owner,
               repo: context.repo.repo,
               state: 'open',
               labels: 'monitoring'
             });
-            
             if (issues.length === 0) {
-              // Cria nova issue
               await github.rest.issues.create({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                title: title,
+                title: `Falha no Monitoramento - ${today}`,
                 body: report,
                 labels: ['monitoring', 'bug']
               });
-              console.log('✅ Issue criada com sucesso');
+              console.log('Issue criada com sucesso');
             } else {
-              console.log('⚠️ Já existe uma issue aberta para monitoramento');
+              console.log('Ja existe uma issue aberta');
             }
