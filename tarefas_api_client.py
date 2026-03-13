@@ -334,12 +334,15 @@ class TarefaModel:
             status_atual = tarefa_atual.get("status", "em_andamento") if tarefa_atual else "em_andamento"
 
             _put(f"/tarefas-app/tarefas/{tarefa_id}", {
-                "titulo":      titulo,
-                "descricao":   descricao_longa,
-                "responsavel": responsavel or "",
-                "usuario_id":  tarefa_atual.get("usuario_id") if tarefa_atual else None,
-                "prazo":       prazo_str,
-                "status":      status_atual,   # mantém o status atual do kanban
+                "titulo":          titulo,
+                "descricao":       descricao_longa,
+                "descricao_longa": descricao_longa,
+                "comentarios":     comentarios or "",
+                "responsavel":     responsavel or "",
+                "usuario_id":      tarefa_atual.get("usuario_id") if tarefa_atual else None,
+                "prazo":           prazo_str,
+                "status":          status_atual,
+                "fase":            fase,
             })
             print(f"🟢 Detalhes da tarefa {tarefa_id} atualizados com sucesso")
             return True
