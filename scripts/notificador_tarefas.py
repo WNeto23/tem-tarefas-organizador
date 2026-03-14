@@ -224,7 +224,8 @@ def gerar_insight(tarefas: List[Dict]) -> str:
     total      = len(tarefas)
     urgentes   = len(c["urgentes"])
     pendentes  = len(c["pendentes"])
-    concluidas = len(c["por_status"].get("concluida", []))
+    # Conta por fase=resolvido (campo real no banco)
+    concluidas = sum(1 for t in tarefas if t.get("fase") == "resolvido")
 
     if urgentes > 0:
         return f"⚠️ Você tem *{urgentes} tarefa(s) urgente(s)*. Priorize agora."
@@ -279,7 +280,7 @@ def msg_resumo_completo(nome: str, tarefas: List[Dict]) -> str:
             linhas.append(f"{emoji} {status.replace('_',' ').title()}: *{len(lista)}*")
 
     linhas += ["", SEP, f"📌 *Total pendente:* {len(c['pendentes'])}", "",
-               f"💡 {gerar_insight(tarefas)}"]
+               gerar_insight(tarefas)]
     linhas += bloco_sugestao(tarefas)
     return "\n".join(linhas)
 
@@ -299,7 +300,7 @@ def msg_pendentes(nome: str, tarefas: List[Dict], titulo: str) -> str:
 
     linhas += ["", SEP,
                f"📌 *Total:* {len(c['pendentes'])} pendente(s)  🕒 {hora}",
-               "", f"💡 {gerar_insight(tarefas)}"]
+               "", gerar_insight(tarefas)]
     linhas += bloco_sugestao(tarefas)
     return "\n".join(linhas)
 
@@ -329,7 +330,8 @@ def msg_resumo_final(nome: str, tarefas: List[Dict]) -> str:
     hoje       = datetime.now(TZ).strftime("%d/%m/%Y")
     c          = classificar_tarefas(tarefas)
     total      = len(tarefas)
-    concluidas = len(c["por_status"].get("concluida", []))
+    # Conta por fase=resolvido (campo real no banco) e não por status=concluida
+    concluidas = sum(1 for t in tarefas if t.get("fase") == "resolvido")
     pendentes  = len(c["pendentes"])
     urgentes   = len(c["urgentes"])
     produt     = int((concluidas / total) * 100) if total else 0
@@ -341,7 +343,7 @@ def msg_resumo_final(nome: str, tarefas: List[Dict]) -> str:
         f"📋 Pendentes:   *{pendentes}*",
         f"🔥 Urgentes:    *{urgentes}*", "",
         f"🏆 Produtividade: *{produt}%*", "",
-        SEP, f"💡 {gerar_insight(tarefas)}",
+        SEP, gerar_insight(tarefas),  # sem 💡 extra — gerar_insight já inclui
     ]
     linhas += bloco_sugestao(tarefas)
     linhas += ["", "Até amanhã! 👋"]
