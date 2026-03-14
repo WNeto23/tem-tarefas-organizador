@@ -291,6 +291,12 @@ class TarefaModel:
                         d[campo] = datetime.fromisoformat(d[campo])
                     except:
                         pass
+            # Fallback: se descricao_longa estiver vazia, usa descricao (campo legado)
+            if not d.get("descricao_longa") and d.get("descricao"):
+                d["descricao_longa"] = d["descricao"]
+            # Garante que comentarios nunca seja None
+            if d.get("comentarios") is None:
+                d["comentarios"] = ""
             return d
         except Exception as e:
             print(f"🔴 Erro ao buscar tarefa: {e}")
