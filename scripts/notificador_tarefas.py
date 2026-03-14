@@ -8,6 +8,11 @@ import requests
 from datetime import datetime, date
 import pytz
 from typing import Dict, List, Optional
+from pathlib import Path
+from dotenv import load_dotenv
+
+# Carrega o .env da raiz do projeto (funciona em qualquer subpasta)
+load_dotenv(Path(__file__).parent.parent / ".env")
 
 API_URL        = os.getenv("API_URL_TAREFAS", "https://web-apitarefas.up.railway.app")
 API_TOKEN      = os.getenv("API_TOKEN_TAREFAS", "")
