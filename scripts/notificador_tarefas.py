@@ -1,15 +1,7 @@
 """
 notificador_tarefas.py
 ======================
-Script executado pelo GitHub Actions para enviar notificações de tarefas.
-Determina o tipo de notificação pela hora UTC recebida via env HORARIO_UTC,
-sem janela rígida de minutos — tolerante ao atraso do GitHub Actions.
-Horários BRT → UTC:
-  08:00 BRT = 11:00 UTC → resumo completo
-  09:00 BRT = 12:00 UTC → tarefas pendentes
-  13:00 BRT = 16:00 UTC → urgentes
-  16:00 BRT = 19:00 UTC → pendências da tarde
-  18:00 BRT = 21:00 UTC → resumo final
+Envia notificações com botões inline para o Telegram.
 """
 import os
 import requests
@@ -17,7 +9,6 @@ from datetime import datetime, date
 import pytz
 from typing import Dict, List, Optional
 
-# ── Configurações ─────────────────────────────────────────────────────
 API_URL        = os.getenv("API_URL_TAREFAS", "https://web-apitarefas.up.railway.app")
 API_TOKEN      = os.getenv("API_TOKEN_TAREFAS", "")
 TOKEN_TELEGRAM = os.getenv("TOKEN_TELEGRAM", "")
@@ -47,16 +38,13 @@ HORARIOS_UTC = {
     21: ("resumo",    "RESUMO FINAL DO DIA"),
 }
 
-# Separador visual — muito mais bonito que ─ no Telegram
-SEP  = "━━━━━━━━━━━━━━━━━━━━"
-SEP2 = "──────────────────────"
+SEP = "━━━━━━━━━━━━━━━━━━━━"
 
 
 # ── Helpers ───────────────────────────────────────────────────────────
 
 def log(msg: str):
-    agora = datetime.now(TZ).strftime("%Y-%m-%d %H:%M:%S")
-    print(f"[{agora}] {msg}")
+    print(f"[{datetime.now(TZ).strftime('%Y-%m-%d %H:%M:%S')}] {msg}")
 
 def get_usuarios_com_telegram() -> List[Dict]:
     try:
@@ -75,23 +63,25 @@ def get_tarefas_usuario(user_id: int) -> List[Dict]:
         r = requests.get(f"{API_URL}/tarefas-app/tarefas/{user_id}",
                          headers=HEADERS, timeout=15)
         r.raise_for_status()
-        tarefas = r.json()
-        log(f"✅ Usuário {user_id}: {len(tarefas)} tarefa(s)")
-        return tarefas
+        return r.json()
     except Exception as e:
         log(f"❌ Erro ao buscar tarefas do usuário {user_id}: {e}")
         return []
 
-def enviar_telegram(chat_id: str, texto: str) -> bool:
+def enviar_telegram(chat_id: str, texto: str, reply_markup: dict = None) -> bool:
+    """Envia mensagem com ou sem botões inline."""
+    payload = {
+        "chat_id":                  chat_id,
+        "text":                     texto,
+        "parse_mode":               "Markdown",
+        "disable_web_page_preview": True,
+    }
+    if reply_markup:
+        payload["reply_markup"] = reply_markup
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{TOKEN_TELEGRAM}/sendMessage",
-            json={
-                "chat_id":                  chat_id,
-                "text":                     texto,
-                "parse_mode":               "Markdown",
-                "disable_web_page_preview": True,
-            },
+            json=payload,
             timeout=10,
         )
         r.raise_for_status()
@@ -102,15 +92,58 @@ def enviar_telegram(chat_id: str, texto: str) -> bool:
         return False
 
 
+# ── Botões inline ─────────────────────────────────────────────────────
+
+def teclado_padrao(user_id: int) -> dict:
+    """
+    Botões que aparecem em todas as notificações.
+    callback_data usa o padrão: "acao:user_id" ou "acao:user_id:tarefa_id"
+    """
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "📊 Resumo agora",    "callback_data": f"resumo:{user_id}"},
+                {"text": "📋 Ver pendências",  "callback_data": f"pendentes:{user_id}"},
+            ],
+            [
+                {"text": "🔕 Silenciar hoje",  "callback_data": f"silenciar:{user_id}"},
+                {"text": "✅ Marcar resolvida", "callback_data": f"marcar_menu:{user_id}"},
+            ],
+        ]
+    }
+
+def teclado_marcar_tarefas(user_id: int, tarefas: List[Dict]) -> dict:
+    """
+    Gera botões para marcar as tarefas pendentes como resolvidas.
+    Mostra até 5 tarefas para não poluir.
+    """
+    pendentes = [
+        t for t in tarefas
+        if t.get("status") != "concluida"
+        and t.get("fase") not in ("resolvido", "cancelado", "cancelada", "suspenso")
+    ][:5]
+
+    botoes = []
+    for t in pendentes:
+        titulo_curto = t["titulo"][:30] + "…" if len(t["titulo"]) > 30 else t["titulo"]
+        botoes.append([{
+            "text":          f"✅ {titulo_curto}",
+            "callback_data": f"concluir:{user_id}:{t['id']}",
+        }])
+
+    botoes.append([{"text": "◀️ Voltar", "callback_data": f"resumo:{user_id}"}])
+    return {"inline_keyboard": botoes}
+
+
 # ── Classificação ─────────────────────────────────────────────────────
 
 def classificar_tarefas(tarefas: List[Dict]) -> Dict:
     hoje = date.today()
     resultado = {
-        "urgentes":  [],   # (titulo, dias_atraso)
-        "proximas":  [],   # (titulo, dias)
-        "sem_prazo": [],   # titulo
-        "pendentes": [],   # titulo — todas não concluídas
+        "urgentes":   [],
+        "proximas":   [],
+        "sem_prazo":  [],
+        "pendentes":  [],
         "por_status": {s: [] for s in STATUS_VALIDOS},
     }
     for t in tarefas:
@@ -148,25 +181,23 @@ def classificar_tarefas(tarefas: List[Dict]) -> Dict:
     return resultado
 
 
-# ── Prioridade automática ─────────────────────────────────────────────
+# ── Prioridade e insight ──────────────────────────────────────────────
 
 def calcular_prioridade(tarefa: Dict) -> int:
-    score     = 0
+    score = 0
     status    = tarefa.get("status", "")
     fase      = tarefa.get("fase", "")
     data_venc = tarefa.get("data_vencimento")
     hoje      = date.today()
 
-    if status == "pra_ja":       score += 50
-    elif status == "pendente":   score += 20
-    if fase == "parado":         score += 10
+    if status == "pra_ja":     score += 50
+    elif status == "pendente": score += 20
+    if fase == "parado":       score += 10
 
     if data_venc:
         if isinstance(data_venc, str):
-            try:
-                data_venc = date.fromisoformat(data_venc[:10])
-            except Exception:
-                return score
+            try: data_venc = date.fromisoformat(data_venc[:10])
+            except: return score
         dias = (data_venc - hoje).days
         if dias < 0:    score += 40
         elif dias == 0: score += 30
@@ -177,26 +208,23 @@ def calcular_prioridade(tarefa: Dict) -> int:
 def tarefas_prioritarias(tarefas: List[Dict], limite: int = 3) -> List[str]:
     scored = []
     for t in tarefas:
-        if t.get("status") == "concluida":
-            continue
-        fase = t.get("fase", "")
-        if fase in ("resolvido", "cancelado", "cancelada", "suspenso"):
-            continue
+        if t.get("status") == "concluida": continue
+        if t.get("fase") in ("resolvido", "cancelado", "cancelada", "suspenso"): continue
         scored.append((calcular_prioridade(t), t.get("titulo", "Sem título")))
     scored.sort(reverse=True)
     return [titulo for _, titulo in scored[:limite]]
 
 def gerar_insight(tarefas: List[Dict]) -> str:
-    c         = classificar_tarefas(tarefas)
-    total     = len(tarefas)
-    urgentes  = len(c["urgentes"])
-    pendentes = len(c["pendentes"])
+    c          = classificar_tarefas(tarefas)
+    total      = len(tarefas)
+    urgentes   = len(c["urgentes"])
+    pendentes  = len(c["pendentes"])
     concluidas = len(c["por_status"].get("concluida", []))
 
     if urgentes > 0:
         return f"⚠️ Você tem *{urgentes} tarefa(s) urgente(s)*. Priorize agora."
     if pendentes > 5:
-        return f"📋 Existem *{pendentes} tarefas pendentes*. Hora de priorizar."
+        return f"📋 Existem *{pendentes} tarefas* pendentes. Hora de priorizar."
     if concluidas > 0 and total > 0:
         pct = int((concluidas / total) * 100)
         return f"📈 Você concluiu *{pct}%* das tarefas. Continue!"
@@ -206,15 +234,14 @@ def bloco_sugestao(tarefas: List[Dict]) -> List[str]:
     prioridades = tarefas_prioritarias(tarefas)
     if not prioridades:
         return []
+    nums = ["1️⃣", "2️⃣", "3️⃣"]
     linhas = ["", "🧠 *Sugestão de prioridade:*"]
-    numeros = ["1️⃣", "2️⃣", "3️⃣"]
     for i, titulo in enumerate(prioridades):
-        num = numeros[i] if i < len(numeros) else f"{i+1}."
-        linhas.append(f"  {num} {titulo}")
+        linhas.append(f"{nums[i]} {titulo}")
     return linhas
 
 
-# ── Mensagens em formato card ─────────────────────────────────────────
+# ── Mensagens ─────────────────────────────────────────────────────────
 
 def msg_resumo_completo(nome: str, tarefas: List[Dict]) -> str:
     hoje = datetime.now(TZ).strftime("%d/%m/%Y")
@@ -222,77 +249,54 @@ def msg_resumo_completo(nome: str, tarefas: List[Dict]) -> str:
     c    = classificar_tarefas(tarefas)
 
     linhas = [
-        f"╔══════════════════════╗",
-        f"  📋 RESUMO DO DIA",
-        f"╚══════════════════════╝",
-        f"",
-        f"👤 *{nome}*",
-        f"📅 {hoje}   🕒 {hora}",
-        f"",
+        f"📋 *RESUMO DO DIA*",
         SEP,
+        f"👤 *{nome}*",
+        f"📅 {hoje}  🕒 {hora}",
+        SEP, "",
     ]
 
     if c["urgentes"]:
         linhas.append("🚨 *URGENTES / ATRASADAS*")
         for titulo, dias in c["urgentes"]:
             label = "VENCE HOJE" if dias == 0 else f"ATRASADA {dias}d"
-            linhas.append(f"  🔴 {label} › _{titulo}_")
-        linhas.append("")
+            linhas += [f"🔴 *{label}*", f"  _{titulo}_", ""]
 
     if c["proximas"]:
         linhas.append("⏰ *VENCEM EM BREVE*")
         for titulo, dias in c["proximas"]:
-            linhas.append(f"  🟡 {dias}d › _{titulo}_")
-        linhas.append("")
+            linhas += [f"🟡 *Vence em {dias}d*", f"  _{titulo}_", ""]
 
     linhas.append("📊 *POR STATUS*")
     for status, lista in c["por_status"].items():
         if lista and status != "concluida":
             emoji = STATUS_EMOJI.get(status, "📌")
-            linhas.append(f"  {emoji} {status.replace('_', ' ').title()}: {len(lista)}")
+            linhas.append(f"{emoji} {status.replace('_',' ').title()}: *{len(lista)}*")
 
-    linhas += ["", SEP]
-    linhas.append(f"📌 *Total pendente:* {len(c['pendentes'])}")
-    linhas.append("")
-    linhas.append(f"💡 *Insight:* {gerar_insight(tarefas)}")
+    linhas += ["", SEP, f"📌 *Total pendente:* {len(c['pendentes'])}", "",
+               f"💡 {gerar_insight(tarefas)}"]
     linhas += bloco_sugestao(tarefas)
-
     return "\n".join(linhas)
-
 
 def msg_pendentes(nome: str, tarefas: List[Dict], titulo: str) -> str:
     hora = datetime.now(TZ).strftime("%H:%M")
     c    = classificar_tarefas(tarefas)
 
-    linhas = [
-        f"╔══════════════════════╗",
-        f"  📋 {titulo}",
-        f"╚══════════════════════╝",
-        f"",
-        f"👤 *{nome}*",
-        f"",
-        SEP,
-    ]
+    linhas = [f"📋 *{titulo}*", SEP, f"👤 *{nome}*", SEP, ""]
 
     if c["pendentes"]:
         for i, t in enumerate(c["pendentes"][:10], 1):
-            linhas.append(f"  {i}. {t}")
+            linhas.append(f"{i}. {t}")
         if len(c["pendentes"]) > 10:
-            linhas.append(f"  _...e mais {len(c['pendentes']) - 10} tarefas_")
+            linhas.append(f"_...e mais {len(c['pendentes']) - 10} tarefas_")
     else:
-        linhas.append("  ✅ Nenhuma tarefa pendente!")
+        linhas.append("✅ Nenhuma tarefa pendente!")
 
-    linhas += [
-        "",
-        SEP,
-        f"📌 *Total:* {len(c['pendentes'])} pendente(s)   🕒 {hora}",
-        "",
-        f"💡 *Insight:* {gerar_insight(tarefas)}",
-    ]
+    linhas += ["", SEP,
+               f"📌 *Total:* {len(c['pendentes'])} pendente(s)  🕒 {hora}",
+               "", f"💡 {gerar_insight(tarefas)}"]
     linhas += bloco_sugestao(tarefas)
-
     return "\n".join(linhas)
-
 
 def msg_urgentes(nome: str, tarefas: List[Dict]) -> Optional[str]:
     hora = datetime.now(TZ).strftime("%H:%M")
@@ -301,65 +305,41 @@ def msg_urgentes(nome: str, tarefas: List[Dict]) -> Optional[str]:
     if not c["urgentes"] and not c["proximas"]:
         return None
 
-    linhas = [
-        f"╔══════════════════════╗",
-        f"  🚨 ALERTA DE URGÊNCIA",
-        f"╚══════════════════════╝",
-        f"",
-        f"👤 *{nome}*, atenção agora:",
-        f"",
-        SEP,
-    ]
+    linhas = [f"🚨 *ALERTA DE URGÊNCIA*", SEP,
+              f"👤 *{nome}*, atenção agora:", SEP, ""]
 
     for titulo, dias in c["urgentes"]:
         label = "VENCE HOJE" if dias == 0 else f"ATRASADA {dias}d"
-        linhas.append(f"🔴 *{label}*")
-        linhas.append(f"  _{titulo}_")
-        linhas.append("")
+        linhas += [f"🔴 *{label}*", f"  _{titulo}_", ""]
 
     for titulo, dias in c["proximas"]:
-        linhas.append(f"🟡 *Vence em {dias}d*")
-        linhas.append(f"  _{titulo}_")
-        linhas.append("")
+        linhas += [f"🟡 *Vence em {dias}d*", f"  _{titulo}_", ""]
 
-    linhas += [
-        SEP,
-        f"🕒 {hora}   ⚠️ Acesse o app para atualizar.",
-    ]
+    linhas += [SEP, f"🕒 {hora}  ⚠️ Acesse o app para atualizar."]
     linhas += bloco_sugestao(tarefas)
-
     return "\n".join(linhas)
 
-
 def msg_resumo_final(nome: str, tarefas: List[Dict]) -> str:
-    hora = datetime.now(TZ).strftime("%H:%M")
-    c    = classificar_tarefas(tarefas)
+    hora       = datetime.now(TZ).strftime("%H:%M")
+    hoje       = datetime.now(TZ).strftime("%d/%m/%Y")
+    c          = classificar_tarefas(tarefas)
     total      = len(tarefas)
     concluidas = len(c["por_status"].get("concluida", []))
     pendentes  = len(c["pendentes"])
     urgentes   = len(c["urgentes"])
-    produtividade = int((concluidas / total) * 100) if total else 0
+    produt     = int((concluidas / total) * 100) if total else 0
 
     linhas = [
-        f"╔══════════════════════╗",
-        f"  📊 RESUMO FINAL DO DIA",
-        f"╚══════════════════════╝",
-        f"",
-        f"👤 *{nome}*",
-        f"",
-        SEP,
+        f"📊 *RESUMO FINAL DO DIA*", SEP,
+        f"👤 *{nome}*", f"📅 {hoje}  🕒 {hora}", SEP, "",
         f"✅ Concluídas:  *{concluidas}*",
         f"📋 Pendentes:   *{pendentes}*",
-        f"🔥 Urgentes:    *{urgentes}*",
-        f"",
-        f"🏆 Produtividade: *{produtividade}%*",
-        SEP,
-        f"",
-        f"💡 *Insight:* {gerar_insight(tarefas)}",
+        f"🔥 Urgentes:    *{urgentes}*", "",
+        f"🏆 Produtividade: *{produt}%*", "",
+        SEP, f"💡 {gerar_insight(tarefas)}",
     ]
     linhas += bloco_sugestao(tarefas)
-    linhas += ["", f"🕒 Gerado às {hora} · Até amanhã! 👋"]
-
+    linhas += ["", "Até amanhã! 👋"]
     return "\n".join(linhas)
 
 
@@ -369,11 +349,9 @@ def main():
     log("🚀 Iniciando notificador de tarefas")
 
     if not TOKEN_TELEGRAM:
-        log("❌ TOKEN_TELEGRAM não configurado")
-        return
+        log("❌ TOKEN_TELEGRAM não configurado"); return
     if not API_TOKEN:
-        log("❌ API_TOKEN_TAREFAS não configurado")
-        return
+        log("❌ API_TOKEN_TAREFAS não configurado"); return
 
     hora_utc = datetime.utcnow().hour
     log(f"⏰ Hora UTC atual: {hora_utc:02d}h")
@@ -382,37 +360,32 @@ def main():
     if not tipo:
         tipo, titulo_notif = HORARIOS_UTC.get(hora_utc - 1, (None, None))
         if tipo:
-            log(f"⚠️  Horário exato não encontrado, usando hora anterior ({hora_utc - 1}h UTC)")
+            log(f"⚠️  Usando hora anterior ({hora_utc - 1}h UTC)")
 
     if not tipo:
-        log(f"⏰ Hora {hora_utc:02d}h UTC — sem notificação programada")
-        return
+        log(f"⏰ Hora {hora_utc:02d}h UTC — sem notificação programada"); return
 
     log(f"📋 Tipo: {tipo} — {titulo_notif}")
 
     usuarios = get_usuarios_com_telegram()
     if not usuarios:
-        log("⚠️  Nenhum usuário com Telegram")
-        return
+        log("⚠️  Nenhum usuário com Telegram"); return
 
-    enviados = 0
-    falhas   = 0
+    enviados = falhas = 0
 
     for usuario in usuarios:
         user_id = usuario.get("id")
-        nome    = usuario.get("nome_completo") or usuario.get("nome", "Usuário")
+        nome    = usuario.get("nome_completo") or "Usuário"
         chat_id = usuario.get("telegram_chat_id")
 
         if not user_id or not chat_id:
-            log(f"⚠️  Usuário sem id ou chat_id: {usuario}")
             continue
 
         log(f"📱 Processando: {nome} (ID: {user_id})")
         tarefas = get_tarefas_usuario(user_id)
 
         if not tarefas:
-            log(f"ℹ️  {nome} não tem tarefas")
-            continue
+            log(f"ℹ️  {nome} não tem tarefas"); continue
 
         if tipo == "completo":
             mensagem = msg_resumo_completo(nome, tarefas)
@@ -421,14 +394,16 @@ def main():
         elif tipo == "urgentes":
             mensagem = msg_urgentes(nome, tarefas)
             if not mensagem:
-                log(f"ℹ️  {nome} não tem tarefas urgentes — pulando")
-                continue
+                log(f"ℹ️  {nome} sem urgências — pulando"); continue
         elif tipo == "resumo":
             mensagem = msg_resumo_final(nome, tarefas)
         else:
             continue
 
-        if enviar_telegram(chat_id, mensagem):
+        # Botões inline em todas as notificações
+        teclado = teclado_padrao(user_id)
+
+        if enviar_telegram(chat_id, mensagem, reply_markup=teclado):
             enviados += 1
         else:
             falhas += 1
