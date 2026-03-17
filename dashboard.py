@@ -301,6 +301,12 @@ def criar_dashboard(
             if t.get("data_vencimento") and t["data_vencimento"] <= hoje
             and t.get("fase") not in FASES_CONCLUIDAS | FASES_ARQUIVADAS
         ))
+
+        try:
+            arquivadas = tarefa_model.listar_arquivadas(user_id)
+            txt_arquivadas.value = str(len(arquivadas))
+        except Exception:
+            txt_arquivadas.value = "0"
     # ── BOTÃO DE NOVA TAREFA ───────────────────────────────────────────────────
     log_debug("Criando botão de nova tarefa")
     def abrir_modal_nova_tarefa(e):

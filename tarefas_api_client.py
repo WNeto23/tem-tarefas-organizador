@@ -413,8 +413,15 @@ class TarefaModel:
     def arquivar_tarefas_antigas(self, usuario_id=None) -> int:
         try:
             print(f"🔵 Arquivando tarefas antigas do usuário {usuario_id}")
-            r = _post("/tarefas-app/tarefas/arquivar-antigas", {"usuario_id": usuario_id})
-            return r.get("arquivadas", 0)
+            params = {"usuario_id": usuario_id} if usuario_id else {}
+            r = requests.post(
+                f"{_URL}/tarefas-app/tarefas/arquivar-antigas",
+                headers=_HEADERS,
+                params=params,
+                timeout=_TIMEOUT,
+            )
+            r.raise_for_status()
+            return r.json().get("arquivadas", 0)
         except Exception as e:
             print(f"ℹ️ Endpoint de arquivar não disponível: {e}")
             return 0
